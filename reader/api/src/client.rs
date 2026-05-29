@@ -144,10 +144,10 @@ impl Client {
         })
     }
 
-    pub async fn get_favorites(&self) -> Result<proto::FavoriteTitlesView> {
+    pub async fn get_favorites(&self) -> Result<proto::SubscribedTitlesView> {
         let body = self.get_raw("title_list/bookmark", &[]).await?;
-        extract_variant(body, "favorite_titles_view", |d| match d {
-            proto::success_result::Data::FavoriteTitlesView(v) => Ok(v),
+        extract_variant(body, "subscribed_titles_view", |d| match d {
+            proto::success_result::Data::SubscribedTitlesView(v) => Ok(v),
             _ => Err(()),
         })
     }
@@ -301,10 +301,11 @@ fn server_error(e: proto::ErrorResult) -> ApiError {
 fn variant_name(d: &proto::success_result::Data) -> &'static str {
     use proto::success_result::Data::*;
     match d {
-        TitleDetailView(_)     => "title_detail_view",
-        MangaViewer(_)         => "manga_viewer",
-        ProfileSettingsView(_) => "profile_settings_view",
-        SearchView(_)          => "search_view",
-        FavoriteTitlesView(_)  => "favorite_titles_view",
+        SubscribedTitlesView(_) => "subscribed_titles_view",
+        TitleDetailView(_)      => "title_detail_view",
+        MangaViewer(_)          => "manga_viewer",
+        ProfileSettingsView(_)  => "profile_settings_view",
+        SearchView(_)           => "search_view",
+        FavoriteTitlesView(_)   => "favorite_titles_view",
     }
 }

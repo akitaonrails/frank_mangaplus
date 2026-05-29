@@ -65,6 +65,15 @@ export type MangaViewer = {
   titleLanguage: number;
 };
 
+// What /title_list/bookmark actually returns. Java method is named
+// getFavoriteTitles() and the endpoint URL says "bookmark", but the
+// server response is a SubscribedTitlesView (oneof field 7) — confirmed
+// by wire-probing the live API. titles is a flat list.
+export type SubscribedTitlesView = {
+  titles: Title[];
+};
+
+// Kept for documentation; the bookmark endpoint does NOT return this.
 export type FavoriteTitleGroup = {
   language: number;
   titles: Title[];

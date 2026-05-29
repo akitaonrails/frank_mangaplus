@@ -37,7 +37,7 @@ async fn get_profile(
 #[tauri::command]
 async fn get_favorites(
     state: tauri::State<'_, AppState>,
-) -> Result<proto::FavoriteTitlesView, String> {
+) -> Result<proto::SubscribedTitlesView, String> {
     state.client.get_favorites().await.map_err(|e| e.to_string())
 }
 

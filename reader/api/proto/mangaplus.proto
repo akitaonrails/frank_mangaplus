@@ -20,6 +20,11 @@ message Response {
 // are the ground truth.
 message SuccessResult {
   oneof data {
+    // SUBSCRIBED_TITLES_VIEW_FIELD_NUMBER = 7. This is what
+    // /title_list/bookmark actually returns (the endpoint name and the
+    // Java method `getFavoriteTitles()` were misleading — wire format
+    // is the ground truth here, found by probing the live response).
+    SubscribedTitlesView subscribed_titles_view = 7;
     // TITLE_DETAIL_VIEW_FIELD_NUMBER = 8
     TitleDetailView      title_detail_view      = 8;
     // MANGA_VIEWER_FIELD_NUMBER = 10
@@ -28,7 +33,8 @@ message SuccessResult {
     ProfileSettingsView  profile_settings_view  = 13;
     // SEARCH_VIEW_FIELD_NUMBER = 35
     SearchView           search_view            = 35;
-    // FAVORITE_TITLES_VIEW_FIELD_NUMBER = 43
+    // FAVORITE_TITLES_VIEW_FIELD_NUMBER = 43 — kept for reference;
+    // /title_list/bookmark does NOT use this despite the name pun.
     FavoriteTitlesView   favorite_titles_view   = 43;
   }
 }
@@ -61,6 +67,16 @@ message FavoriteTitlesView {
 message FavoriteTitleGroup {
   int32          language = 1;
   repeated Title titles   = 2;
+}
+
+// Source: SubscribedTitlesViewOuterClass.java line 548.
+// TITLES_FIELD_NUMBER=1, HISTORY_BANNERS_FIELD_NUMBER=2, VIEW_HISTORY_FIELD_NUMBER=3.
+// This is what /title_list/bookmark actually returns. The user's
+// bookmarked titles arrive as a flat list in `titles`. history_banners
+// (promotional banners on the history screen) and view_history are
+// omitted — we don't surface them in the desktop UI.
+message SubscribedTitlesView {
+  repeated Title titles = 1;
 }
 
 // Source: SearchViewOuterClass.java.

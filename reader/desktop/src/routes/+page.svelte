@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import type { FavoriteTitlesView, Title } from '$lib/types';
+  import type { SubscribedTitlesView, Title } from '$lib/types';
 
   let loading = $state(true);
   let error = $state('');
@@ -9,18 +9,8 @@
 
   onMount(async () => {
     try {
-      const view = await invoke<FavoriteTitlesView>('get_favorites');
-      const seen = new Set<number>();
-      const flat: Title[] = [];
-      for (const group of view.favoriteTitles ?? []) {
-        for (const t of group.titles ?? []) {
-          if (!seen.has(t.titleId)) {
-            seen.add(t.titleId);
-            flat.push(t);
-          }
-        }
-      }
-      titles = flat;
+      const view = await invoke<SubscribedTitlesView>('get_favorites');
+      titles = view.titles ?? [];
     } catch (e) {
       error = String(e);
     } finally {
