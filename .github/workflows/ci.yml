@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: reader -> target
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        working-directory: reader/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Run Rust tests (mangaplus-api)
+        working-directory: reader
+        run: cargo test -p mangaplus-api
+
+      - name: Check Rust formatting (warn only — we don't have a committed rustfmt config yet)
+        working-directory: reader
+        run: cargo fmt --check || true
+
+      - name: Clippy (mangaplus-api)
+        working-directory: reader
+        run: cargo clippy -p mangaplus-api -- -D warnings
+
+      - name: Cargo check (desktop, target only — full build happens in release)
+        working-directory: reader
+        run: cargo check -p mangaplus-desktop
+
+      - name: Build frontend (SvelteKit static export)
+        working-directory: reader/desktop
+        run: bun run build

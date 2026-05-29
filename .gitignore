@@ -25,6 +25,9 @@ secrets/
 # Debug/recon scripts — ad-hoc local tooling, not part of the shipped app.
 .tmp/
 
+# Personal sandbox config (ai-jail, etc.) — machine-local.
+.ai-jail
+
 # OS / editor
 .DS_Store
 .idea/

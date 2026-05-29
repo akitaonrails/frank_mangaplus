@@ -1,0 +1,174 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+          - platform: macos-latest
+            rust_target: aarch64-apple-darwin
+            label: macos-aarch64
+          - platform: macos-latest
+            rust_target: x86_64-apple-darwin
+            label: macos-x86_64
+          - platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            label: windows-x86_64
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: reader -> target
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Install frontend dependencies
+        working-directory: reader/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Run Rust tests
+        working-directory: reader
+        run: cargo test -p mangaplus-api
+
+      # macOS: Import code-signing certificate into a temporary keychain.
+      - name: Import Apple certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode > $CERT_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import $CERT_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Load release notes
+        id: release-notes
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          NOTES_FILE="releases/${TAG}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            BODY=$(cat "$NOTES_FILE")
+          else
+            BODY="Release ${TAG}"
+          fi
+          BODY="${BODY}
+
+          ## Install
+
+          | Platform | File |
+          |----------|------|
+          | Linux (AppImage) | \`mangaplus-reader_*_amd64.AppImage\` |
+          | macOS (Apple Silicon) | \`mangaplus-reader_*_aarch64.dmg\` |
+          | macOS (Intel) | \`mangaplus-reader_*_x64.dmg\` |
+          | Windows | \`mangaplus-reader_*_x64-setup.exe\` |
+
+          ### Setup
+          1. Extract your \`deviceSecret\` from a MANGA Plus install — see \`docs/android-secret.md\` in the source repo.
+          2. Set the env var \`MANGAPLUS_SECRET=<value>\` and launch the app from your terminal, or wait for the in-app settings UI (planned).
+
+          ### Windows first launch
+          The installer is not code-signed. SmartScreen may show a warning — click **More info** then **Run anyway**. One-time only.
+          "
+          echo "body<<RELEASE_EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Build Tauri app
+        id: tauri-build
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing (optional; only set if you have keys)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS code signing
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # macOS notarization
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: reader/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "MANGA Plus Reader ${{ github.ref_name }}"
+          releaseBody: ${{ steps.release-notes.outputs.body }}
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.rust_target }}
+
+      # Linux: optionally GPG-sign the AppImage as well.
+      - name: GPG-sign AppImage
+        if: runner.os == 'Linux' && env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          for f in reader/target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage; do
+            gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+              --detach-sign --armor "$f"
+          done
+
+      - name: Upload AppImage signature
+        if: runner.os == 'Linux' && env.GPG_PRIVATE_KEY != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          for f in reader/target/${{ matrix.rust_target }}/release/bundle/appimage/*.asc; do
+            gh release upload "${{ github.ref_name }}" "$f" --clobber
+          done

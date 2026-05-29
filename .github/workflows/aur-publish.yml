@@ -1,0 +1,107 @@
+name: AUR Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  aur-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Download AppImage and compute SHA256
+        id: checksum
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          FILENAME="mangaplus-reader_${VERSION}_amd64.AppImage"
+          URL="https://github.com/akitaonrails/frank_mangaplus/releases/download/${TAG}/${FILENAME}"
+          echo "Downloading ${URL}..."
+          curl -fSL -o "${FILENAME}" "${URL}"
+          SHA256=$(sha256sum "${FILENAME}" | awk '{print $1}')
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+          echo "SHA256: ${SHA256}"
+
+      - name: Generate PKGBUILD
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA256="${{ steps.checksum.outputs.sha256 }}"
+          cat > PKGBUILD << 'EOF'
+          # Maintainer: AkitaOnRails <fabio.akita@gmail.com>
+          pkgname=mangaplus-reader-bin
+          pkgver=VERSION_PLACEHOLDER
+          pkgrel=1
+          pkgdesc="Personal-use desktop reader for MANGA Plus (talks to the official API with your own deviceSecret)"
+          arch=('x86_64')
+          url="https://github.com/akitaonrails/frank_mangaplus"
+          license=('MIT')
+          depends=('webkit2gtk-4.1' 'hicolor-icon-theme' 'fuse2')
+          provides=('mangaplus-reader')
+          conflicts=('mangaplus-reader')
+          options=('!strip' '!debug')
+          source=("${pkgname}-${pkgver}.AppImage::${url}/releases/download/v${pkgver}/mangaplus-reader_${pkgver}_amd64.AppImage")
+          sha256sums=('SHA256_PLACEHOLDER')
+          noextract=("${pkgname}-${pkgver}.AppImage")
+
+          prepare() {
+              chmod +x "${srcdir}/${pkgname}-${pkgver}.AppImage"
+              "${srcdir}/${pkgname}-${pkgver}.AppImage" --appimage-extract
+          }
+
+          package() {
+              install -Dm755 "${srcdir}/${pkgname}-${pkgver}.AppImage" \
+                  "${pkgdir}/opt/mangaplus-reader/mangaplus-reader.AppImage"
+
+              install -dm755 "${pkgdir}/usr/bin"
+              ln -s /opt/mangaplus-reader/mangaplus-reader.AppImage "${pkgdir}/usr/bin/mangaplus-reader"
+
+              if [[ -f "${srcdir}/squashfs-root/usr/share/applications/mangaplus-desktop.desktop" ]]; then
+                  install -Dm644 "${srcdir}/squashfs-root/usr/share/applications/mangaplus-desktop.desktop" \
+                      "${pkgdir}/usr/share/applications/mangaplus-reader.desktop"
+                  sed -i 's|Exec=mangaplus-desktop|Exec=mangaplus-reader|g' \
+                      "${pkgdir}/usr/share/applications/mangaplus-reader.desktop"
+              fi
+
+              for size in 32x32 128x128 256x256; do
+                  for cand in "${srcdir}/squashfs-root/usr/share/icons/hicolor/${size}/apps/"*.png; do
+                      [[ -f "$cand" ]] || continue
+                      install -Dm644 "$cand" \
+                          "${pkgdir}/usr/share/icons/hicolor/${size}/apps/mangaplus-reader.png"
+                      break
+                  done
+              done
+          }
+          EOF
+          sed -i 's/^          //g' PKGBUILD
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" PKGBUILD
+          sed -i "s/SHA256_PLACEHOLDER/${SHA256}/g" PKGBUILD
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: mangaplus-reader-bin
+          pkgbuild: ./PKGBUILD
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ steps.version.outputs.version }}"
+          ssh_keyscan_types: ed25519
