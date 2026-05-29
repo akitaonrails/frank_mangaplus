@@ -2015,6 +2015,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "reqwest 0.12.28",
+ "serde",
  "thiserror 2.0.18",
  "tokio",
 ]

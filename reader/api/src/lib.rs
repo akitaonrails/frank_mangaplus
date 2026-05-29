@@ -15,5 +15,5 @@ pub mod proto {
 mod client;
 mod error;
 
-pub use client::Client;
+pub use client::{lang, Client, ClientConfig, API_HOST, APP_VER, OS_VER_DEFAULT};
 pub use error::{ApiError, Result};

@@ -9,6 +9,7 @@ description = "Async client for the MANGA Plus mobile API (protobuf over HTTPS)"
 prost = { workspace = true }
 prost-types = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 
