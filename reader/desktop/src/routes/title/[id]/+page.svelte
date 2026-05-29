@@ -117,8 +117,11 @@
     for (const div of dividers) if (div.afterIndex === -1) built.push({ type: 'divider', label: div.label });
     for (const ch of chapters) built.push({ type: 'chapter', chapter: ch });
 
+    // Important: use built.length (not rows.length) here. Reading rows
+    // right after writing it inside the $effect → infinite reactive loop
+    // ("effect_update_depth_exceeded"). Same value, different dep graph.
     rows = built;
-    visibleEnd = Math.min(50, rows.length);
+    visibleEnd = Math.min(50, built.length);
     if (listContainer) listContainer.scrollTop = 0;
   }
 
