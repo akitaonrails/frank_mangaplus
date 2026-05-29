@@ -241,6 +241,7 @@
                       class:is-read={readSet.has(ch.chapterId)}
                       class:is-last-read={ch.chapterId === lastReadId}
                       href="/reader/{ch.chapterId}"
+                      onclick={(e) => openChapter(ch.chapterId, e)}
                     >
                       <div class="chapter-meta">
                         <span class="chapter-name">{ch.name}</span>
