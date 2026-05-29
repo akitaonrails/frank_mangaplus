@@ -86,7 +86,18 @@ message TitleList {
 
 // Source: TitleDetailViewOuterClass.java.
 // TITLE=1, TITLE_IMAGE_URL=2, OVERVIEW=3, BACKGROUND_IMAGE_URL=4,
-// IS_SUBSCRIBED=15, CHAPTER_LIST_V2=38.
+// IS_SUBSCRIBED=15, CHAPTER_LIST_GROUP=28, CHAPTER_LIST_V2=38.
+//
+// PAGINATION NOTES (important for long-running series like One Piece):
+//  - There is NO "load more chapters" endpoint. title_detailV3 returns
+//    everything in one response.
+//  - chapter_list_v2 is the canonical flat list for newer titles. For huge
+//    series it can be 1000+ Chapter messages, so the UI must virtualize.
+//  - chapter_list_group is the legacy structure: split into first/mid/last
+//    with a chapter_numbers label like "1-50, 51-100, ...". For long
+//    series, mid_chapter_list is often empty and the app shows a "..."
+//    expander. Kept here as a fallback in case chapter_list_v2 is empty.
+//
 // All other fields (banners, SNS, tickets, labels, etc.) are omitted.
 message TitleDetailView {
   Title            title                = 1;
@@ -94,7 +105,18 @@ message TitleDetailView {
   string           overview             = 3;
   string           background_image_url = 4;
   bool             is_subscribed        = 15;
+  ChapterGroup     chapter_list_group   = 28;
   repeated Chapter chapter_list_v2      = 38;
+}
+
+// Source: TitleDetailViewOuterClass.java inner class ChapterGroup line 1971.
+// CHAPTER_NUMBERS=1, FIRST_CHAPTER_LIST=2, MID_CHAPTER_LIST=3, LAST_CHAPTER_LIST=4.
+// Used as the legacy pagination structure for long series.
+message ChapterGroup {
+  string           chapter_numbers    = 1;
+  repeated Chapter first_chapter_list = 2;
+  repeated Chapter mid_chapter_list   = 3;
+  repeated Chapter last_chapter_list  = 4;
 }
 
 // Source: MangaViewerOuterClass.java.
