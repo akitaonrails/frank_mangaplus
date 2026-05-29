@@ -3,21 +3,56 @@
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import type { MangaViewer, MangaPage } from '$lib/types';
+  import type { MangaViewer, MangaPage, Chapter } from '$lib/types';
   import { markChapterRead } from '$lib/readState';
+
+  // ---------- state ----------
 
   let loading = $state(true);
   let error = $state('');
-  let viewer = $state<MangaViewer | null>(null);
-  let mangaPages: MangaPage[] = $state([]);
 
+  // The first chapter the user opened. We never replace this — it owns
+  // the title list, header info, etc.
+  let initialViewer: MangaViewer | null = $state(null);
+
+  // Flat list of (page, owning-chapter-id) so we can show a header
+  // when chapter changes mid-scroll.
+  type LoadedPage = { mp: MangaPage; chapterId: number; chapterName: string };
+  let loadedPages: LoadedPage[] = $state([]);
+  let loadedChapterIds = new Set<number>();
+
+  // Ordered chapter list of the parent title, ascending by chapter_id
+  // (so "next" means next in publication order).
+  let allChapters: Chapter[] = $state([]);
+
+  // Auto-advance state
+  let fetchingNext = $state(false);
+
+  // Currently-on-screen page (1-indexed, across all loaded chapters)
   let currentPage = $state(1);
-  let imgEls: HTMLImageElement[] = $state([]);
+  let frameEls: HTMLElement[] = $state([]);
+  let scrollRoot: HTMLElement | undefined = $state();
 
-  // Intersection observer to track current visible page
   let observer: IntersectionObserver | null = null;
 
-  onMount(async () => {
+  // Currently-visible chapter (derived from currentPage)
+  let visibleChapterName = $derived(loadedPages[currentPage - 1]?.chapterName ?? '');
+  let visibleChapterId = $derived(loadedPages[currentPage - 1]?.chapterId ?? 0);
+
+  // ---------- load ----------
+
+  onMount(() => {
+    void loadInitial();
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      observer?.disconnect();
+    };
+  });
+
+  onDestroy(() => observer?.disconnect());
+
+  async function loadInitial() {
     const chapterId = parseInt($page.params.chapterId, 10);
     try {
       const v = await invoke<MangaViewer>('get_chapter_pages', {
@@ -27,146 +62,209 @@
         clang: 'eng',
         countryCode: 'US',
       });
-      viewer = v;
-      mangaPages = (v.pages ?? [])
-        .map(p => p.data?.mangaPage)
-        .filter((mp): mp is MangaPage => !!mp);
-      console.log('[reader] got', mangaPages.length, 'pages. First URL:', mangaPages[0]?.imageUrl);
-      // Persist read state — chapter is considered "opened" the moment the
-      // server actually returned its pages (so we don't mark broken chapters
-      // as read on transient errors).
-      if (v.titleId && v.chapterId) {
-        markChapterRead(v.titleId, v.chapterId);
-      }
+      initialViewer = v;
+      // Ascending chapter order (the API sometimes returns mixed).
+      allChapters = [...(v.chapters ?? [])].sort((a, b) => a.chapterId - b.chapterId);
+      appendChapter(v);
+      if (v.titleId && v.chapterId) markChapterRead(v.titleId, v.chapterId);
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+  }
 
-    // keyboard handler
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      observer?.disconnect();
-    };
+  function appendChapter(v: MangaViewer) {
+    if (loadedChapterIds.has(v.chapterId)) return;
+    loadedChapterIds.add(v.chapterId);
+    const pagesOnly = (v.pages ?? [])
+      .map(p => p.data?.mangaPage)
+      .filter((mp): mp is MangaPage => !!mp);
+    loadedPages = [
+      ...loadedPages,
+      ...pagesOnly.map(mp => ({ mp, chapterId: v.chapterId, chapterName: v.chapterName })),
+    ];
+  }
+
+  function nextChapterIdAfter(chId: number): number | null {
+    const i = allChapters.findIndex(c => c.chapterId === chId);
+    if (i < 0 || i === allChapters.length - 1) return null;
+    return allChapters[i + 1].chapterId;
+  }
+
+  function prevChapterIdBefore(chId: number): number | null {
+    const i = allChapters.findIndex(c => c.chapterId === chId);
+    if (i <= 0) return null;
+    return allChapters[i - 1].chapterId;
+  }
+
+  // When the user is within 2 pages of the end of the last-loaded chapter,
+  // pre-fetch the next one and append. Resulting pages flow continuously.
+  async function maybePrefetchNext() {
+    if (fetchingNext || loadedPages.length === 0) return;
+    const distanceToEnd = loadedPages.length - currentPage;
+    if (distanceToEnd > 2) return;
+
+    const lastLoadedChapter = loadedPages[loadedPages.length - 1].chapterId;
+    const nextId = nextChapterIdAfter(lastLoadedChapter);
+    if (nextId == null || loadedChapterIds.has(nextId)) return;
+
+    fetchingNext = true;
+    try {
+      const v = await invoke<MangaViewer>('get_chapter_pages', {
+        chapterId: nextId,
+        imgQuality: 'super_high',
+        viewerMode: 'vertical',
+        clang: 'eng',
+        countryCode: 'US',
+      });
+      appendChapter(v);
+    } catch (e) {
+      console.warn('[reader] prefetch next chapter failed:', e);
+    } finally {
+      fetchingNext = false;
+    }
+  }
+
+  // Mark chapters as read as the user scrolls through them.
+  let lastMarkedChapter = $state(0);
+  $effect(() => {
+    if (visibleChapterId && visibleChapterId !== lastMarkedChapter && initialViewer) {
+      markChapterRead(initialViewer.titleId, visibleChapterId);
+      lastMarkedChapter = visibleChapterId;
+    }
+    // Also fire prefetch check whenever currentPage moves.
+    void maybePrefetchNext();
   });
 
-  onDestroy(() => {
-    observer?.disconnect();
-  });
+  // ---------- nav ----------
 
-  // Called once images are rendered; set up intersection observer
   function setupObserver() {
     observer?.disconnect();
-    if (imgEls.length === 0) return;
-    const ratio = 0.4;
+    if (frameEls.length === 0 || !scrollRoot) return;
     observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting) {
+          if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
             const idx = Number((entry.target as HTMLElement).dataset.pageIndex);
-            if (!isNaN(idx)) {
-              currentPage = idx + 1;
-            }
+            if (!isNaN(idx)) currentPage = idx + 1;
           }
         }
       },
-      { threshold: ratio }
+      { root: scrollRoot, threshold: [0.5] }
     );
-    for (const img of imgEls) {
-      if (img) observer.observe(img);
-    }
+    for (const el of frameEls) if (el) observer.observe(el);
   }
 
-  // Reactive: whenever imgEls is populated, wire up observer
   $effect(() => {
-    if (imgEls.length > 0 && !loading) {
-      setupObserver();
-    }
+    if (frameEls.length > 0 && !loading) setupObserver();
   });
 
-  function onKey(e: KeyboardEvent) {
-    if (e.key === 'ArrowDown' || e.key === 'j') {
-      scrollByPage(1);
-    } else if (e.key === 'ArrowUp' || e.key === 'k') {
-      scrollByPage(-1);
-    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      // navigate back to title detail (prev/next chapter is a follow-up feature)
-      if (viewer) goto(`/title/${viewer.titleId}`);
-    }
+  function goToPageIndex(idx: number) {
+    if (idx < 0 || idx >= loadedPages.length) return;
+    frameEls[idx]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  function scrollByPage(direction: number) {
-    const nextIdx = currentPage - 1 + direction;
-    const el = imgEls[nextIdx];
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  function onKey(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'j' || e.key === ' ' || e.key === 'PageDown') {
+      e.preventDefault();
+      goToPageIndex(currentPage); // currentPage is 1-indexed → next idx
+    } else if (e.key === 'ArrowUp' || e.key === 'k' || e.key === 'PageUp') {
+      e.preventDefault();
+      goToPageIndex(currentPage - 2);
+    } else if (e.key === 'Escape') {
+      goBack();
     }
   }
 
   function goBack() {
-    if (viewer) goto(`/title/${viewer.titleId}`);
+    if (initialViewer) goto(`/title/${initialViewer.titleId}`);
     else history.back();
+  }
+
+  // Click on the page: top half → prev, bottom half → next.
+  function onZoneClick(direction: 'prev' | 'next') {
+    if (direction === 'next') goToPageIndex(currentPage);
+    else goToPageIndex(currentPage - 2);
   }
 </script>
 
 <svelte:head>
   <title>
-    {viewer ? `${viewer.titleName} — ${viewer.chapterName}` : 'Reader'} — MANGA+
+    {initialViewer ? `${initialViewer.titleName} — ${visibleChapterName || initialViewer.chapterName}` : 'Reader'} — MANGA+
   </title>
 </svelte:head>
 
 <div class="reader">
-  <!-- Reader header -->
   <header class="reader-header">
     <button class="back-btn" onclick={goBack}>← Back</button>
-    {#if viewer}
-      <span class="reader-title">{viewer.titleName}</span>
-      <span class="reader-chapter">{viewer.chapterName}</span>
+    {#if initialViewer}
+      <span class="reader-title">{initialViewer.titleName}</span>
+      <span class="reader-chapter">{visibleChapterName || initialViewer.chapterName}</span>
     {/if}
     <span class="page-indicator">
-      {#if mangaPages.length > 0}
-        {currentPage} / {mangaPages.length}
+      {#if loadedPages.length > 0}
+        {currentPage} / {loadedPages.length}{#if fetchingNext}…{/if}
       {/if}
     </span>
   </header>
 
-  <!-- Content -->
-  <main class="reader-main">
+  <main class="reader-main" bind:this={scrollRoot}>
     {#if loading}
       <div class="spinner"></div>
     {:else if error}
       <div class="empty-state"><p>Error: {error}</p></div>
-    {:else if mangaPages.length === 0}
+    {:else if loadedPages.length === 0}
       <div class="empty-state"><p>No pages found for this chapter.</p></div>
     {:else}
       <div class="page-stack">
-        {#each mangaPages as mp, i (i)}
-          <img
-            src={mp.imageUrl.replace(/^https:/, 'mpimg:')}
-            alt="Page {i + 1}"
-            width={mp.width || undefined}
-            height={mp.height || undefined}
-            loading={i < 3 ? 'eager' : 'lazy'}
-            decoding="async"
+        {#each loadedPages as lp, i (i)}
+          {@const prevChapterId = i > 0 ? loadedPages[i - 1].chapterId : 0}
+          {#if lp.chapterId !== prevChapterId && i > 0}
+            <div class="chapter-divider">▼ {lp.chapterName}</div>
+          {/if}
+          <div
+            class="page-frame"
             data-page-index={i}
-            bind:this={imgEls[i]}
-            class="manga-page"
-          />
+            bind:this={frameEls[i]}
+          >
+            <img
+              src={lp.mp.imageUrl.replace(/^https:/, 'mpimg:')}
+              alt="Page {i + 1}"
+              loading={i < 3 ? 'eager' : 'lazy'}
+              decoding="async"
+              class="manga-page"
+            />
+            <button
+              class="click-zone zone-prev"
+              type="button"
+              aria-label="Previous page"
+              onclick={() => onZoneClick('prev')}
+            ></button>
+            <button
+              class="click-zone zone-next"
+              type="button"
+              aria-label="Next page"
+              onclick={() => onZoneClick('next')}
+            ></button>
+          </div>
         {/each}
+        {#if fetchingNext}
+          <div class="loading-next"><div class="spinner"></div><span>loading next chapter…</span></div>
+        {:else if loadedPages.length > 0 && nextChapterIdAfter(loadedPages[loadedPages.length - 1].chapterId) == null}
+          <div class="end-of-title">— end of available chapters —</div>
+        {/if}
       </div>
     {/if}
   </main>
 
-  <!-- Footer progress -->
-  {#if !loading && mangaPages.length > 0}
+  {#if !loading && loadedPages.length > 0}
     <footer class="reader-footer">
       <div
         class="progress-bar"
-        style="width: {(currentPage / mangaPages.length) * 100}%"
+        style:width={(currentPage / loadedPages.length) * 100 + '%'}
       ></div>
-      <span class="progress-label">Page {currentPage} of {mangaPages.length}</span>
+      <span class="progress-label">Page {currentPage} of {loadedPages.length}</span>
     </footer>
   {/if}
 </div>
@@ -175,7 +273,7 @@
   .reader {
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
+    height: 100vh;
     background: #111;
   }
 
@@ -192,6 +290,7 @@
     gap: 10px;
     padding: 0 16px;
     font-size: 0.85rem;
+    flex-shrink: 0;
   }
 
   .back-btn {
@@ -223,7 +322,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex-shrink: 1;
+    min-width: 0;
   }
 
   .page-indicator {
@@ -237,29 +337,85 @@
     flex: 1;
     overflow-y: auto;
     scroll-behavior: smooth;
+    /* Snap each .page-frame to the top of the viewport. mandatory means
+       the browser always settles on a page boundary, never between. */
+    scroll-snap-type: y mandatory;
   }
 
   .page-stack {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
-    padding: 8px 0 48px;
+  }
+
+  .page-frame {
+    /* Each frame fills the visible reader area exactly. */
+    height: calc(100vh - 48px - 32px); /* viewport - header - footer */
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    /* Small gap below before the next frame snaps in. */
+    margin-bottom: 4px;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
   }
 
   .manga-page {
-    max-width: 900px;
-    width: 100%;
+    max-height: 100%;
+    max-width: 100%;
+    width: auto;
     height: auto;
     display: block;
     background: #1a1a1a;
+    user-select: none;
+    pointer-events: none; /* clicks go through to the zones below */
+  }
+
+  .click-zone {
+    position: absolute;
+    left: 0;
+    right: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    /* No visual; just a hit-target. */
+  }
+  .zone-prev { top: 0; height: 35%; }
+  .zone-next { bottom: 0; height: 65%; }
+  .click-zone:focus-visible {
+    outline: 2px dashed var(--accent);
+    outline-offset: -4px;
+  }
+
+  .chapter-divider {
+    width: 100%;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 28px 16px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.4);
+    scroll-snap-align: start;
+    margin-bottom: 4px;
+  }
+
+  .loading-next, .end-of-title {
+    width: 100%;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    padding: 36px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
   }
 
   .reader-footer {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    position: relative;
     height: 32px;
     background: rgba(10, 10, 10, 0.85);
     backdrop-filter: blur(6px);
@@ -269,6 +425,7 @@
     border-top: 1px solid var(--border);
     font-size: 0.75rem;
     color: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .progress-bar {

@@ -1,4 +1,5 @@
 use mangaplus_api::{proto, Client, ClientConfig};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::http::Response;
 
@@ -17,6 +18,18 @@ fn read_secret() -> String {
         );
         std::process::exit(2);
     })
+}
+
+/// XDG cache dir for the app's image cache. Falls back to ~/.cache then
+/// to a tempdir. Created on first write by fetch_image.
+fn image_cache_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg).join("mangaplus-reader");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".cache/mangaplus-reader");
+    }
+    std::env::temp_dir().join("mangaplus-reader")
 }
 
 // ---------- commands ----------
@@ -101,7 +114,11 @@ async fn get_chapter_pages(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let secret = read_secret();
-    let client = Arc::new(Client::new(ClientConfig::new(secret)).expect("build api client"));
+    let cache_dir = image_cache_dir();
+    eprintln!("[mangaplus-reader] image cache: {}", cache_dir.display());
+    let mut cfg = ClientConfig::new(secret);
+    cfg.image_cache_dir = Some(cache_dir);
+    let client = Arc::new(Client::new(cfg).expect("build api client"));
     let state = AppState { client: client.clone() };
     let client_for_scheme = client.clone();
 

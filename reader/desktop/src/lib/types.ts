@@ -57,6 +57,7 @@ export type Page = {
 export type MangaViewer = {
   pages: Page[];
   chapterId: number;
+  chapters: Chapter[];  // full chapter list of the parent title (field 3)
   titleName: string;
   chapterName: string;
   isVerticalOnly: boolean;

@@ -145,14 +145,18 @@ message ChapterGroup {
 // planType(14), userSubscription(13), ratingPopup(16),
 // titleAvailableLanguages(17), title(18) are omitted.
 message MangaViewer {
-  repeated Page pages            = 1;
-  uint32        chapter_id       = 2;
-  string        title_name       = 5;
-  string        chapter_name     = 6;
-  bool          is_vertical_only = 8;
-  uint32        title_id         = 9;
-  bool          start_from_right = 10;
-  string        title_language   = 15;
+  repeated Page    pages            = 1;
+  uint32           chapter_id       = 2;
+  // CHAPTERS_FIELD_NUMBER = 3 — full chapter list of the parent title.
+  // Lets the reader prefetch the next chapter for seamless auto-advance
+  // without a separate title_detailV3 call.
+  repeated Chapter chapters         = 3;
+  string           title_name       = 5;
+  string           chapter_name     = 6;
+  bool             is_vertical_only = 8;
+  uint32           title_id         = 9;
+  bool             start_from_right = 10;
+  string           title_language   = 15;
 }
 
 // Source: TitleOuterClass.java line 787.

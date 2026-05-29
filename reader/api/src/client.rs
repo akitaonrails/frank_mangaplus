@@ -1,6 +1,7 @@
 use crate::error::{ApiError, Result};
 use crate::proto;
 use prost::Message;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -49,6 +50,10 @@ pub struct ClientConfig {
     /// session out for 10+ minutes, so we self-throttle well below that.
     /// Default: 500 ms (2 req/sec max).
     pub min_request_interval: Duration,
+    /// Where to cache fetched image bytes. `None` disables caching. The
+    /// directory is created on demand; URL path becomes the cache layout
+    /// (e.g. `<cache_dir>/title/100020/chapter/1000486/manga_page/high/1.webp`).
+    pub image_cache_dir: Option<PathBuf>,
 }
 
 impl ClientConfig {
@@ -59,6 +64,7 @@ impl ClientConfig {
             os_ver: OS_VER_DEFAULT.to_string(),
             secret: secret.into(),
             min_request_interval: Duration::from_millis(500),
+            image_cache_dir: None,
         }
     }
 }
@@ -95,24 +101,74 @@ impl Client {
         })
     }
 
+    /// Map a CDN image URL to a stable cache path.
+    /// "https://host/secure/title/X/chapter/Y/manga_page/high/1.webp?hash=..."
+    /// becomes "<cache_dir>/title/X/chapter/Y/manga_page/high/1.webp".
+    fn cache_path_for(&self, url: &str) -> Option<PathBuf> {
+        let base = self.cfg.image_cache_dir.as_ref()?;
+        let no_query = url.split('?').next().unwrap_or(url);
+        // Drop "https://host/" by taking everything after the third slash.
+        let after_host = no_query.splitn(4, '/').nth(3).unwrap_or(no_query);
+        // CDN paths start with "secure/" which we strip for cleanliness.
+        let cleaned = after_host.strip_prefix("secure/").unwrap_or(after_host);
+        Some(base.join(cleaned))
+    }
+
+    fn content_type_from_ext(url: &str) -> &'static str {
+        let path = url.split('?').next().unwrap_or(url);
+        match path.rsplit_once('.').map(|x| x.1) {
+            Some("png")  => "image/png",
+            Some("jpg") | Some("jpeg") => "image/jpeg",
+            Some("gif")  => "image/gif",
+            Some("avif") => "image/avif",
+            Some("heif") | Some("heic") => "image/heif",
+            _ => "image/webp", // overwhelmingly the case
+        }
+    }
+
     /// Fetch an image from the MANGA Plus CDN. Returns (bytes, content-type).
     /// The cookie acquired on a recent API call (e.g. get_chapter_pages) is
     /// reused automatically via the cookie store.
+    ///
+    /// Cached locally when `image_cache_dir` is configured. Cache key is the
+    /// URL path (signed query params stripped, since the underlying image
+    /// is stable). A second request for the same path is served from disk
+    /// without touching the network.
     pub async fn fetch_image(&self, url: &str) -> Result<(Vec<u8>, String)> {
+        let cache_path = self.cache_path_for(url);
+        let ct = Self::content_type_from_ext(url).to_string();
+
+        if let Some(p) = &cache_path {
+            if let Ok(bytes) = tokio::fs::read(p).await {
+                if !bytes.is_empty() {
+                    return Ok((bytes, ct));
+                }
+            }
+        }
+
         self.throttle().await;
         let resp = self.http.get(url).send().await?;
         let status = resp.status();
-        let content_type = resp
+        let server_ct = resp
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("image/webp")
-            .to_string();
+            .map(|s| s.to_string())
+            .unwrap_or(ct);
         if !status.is_success() {
             return Err(ApiError::Status(status.as_u16()));
         }
         let bytes = resp.bytes().await?.to_vec();
-        Ok((bytes, content_type))
+
+        if let Some(p) = &cache_path {
+            if let Some(parent) = p.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            // Best effort — don't fail the user-visible fetch if write fails.
+            let _ = tokio::fs::write(p, &bytes).await;
+        }
+
+        Ok((bytes, server_ct))
     }
 
     /// Block (asynchronously) until enough time has passed since the last
