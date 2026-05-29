@@ -19,12 +19,12 @@
 
   let loading = $state(true);
   let error = $state('');
-  let detail = $state<TitleDetailView | null>(null);
+  let detail: TitleDetailView | null = $state(null);
   let isFavorited = $state(false);
   let favPending = $state(false);
   let sortDesc = $state(true);
-  let readSet = $state<Set<number>>(new Set());
-  let lastReadId = $state<number | null>(null);
+  let readSet: Set<number> = $state(new Set());
+  let lastReadId: number | null = $state(null);
 
   // Flattened chapter list for rendering
   type ChapterRow = { type: 'chapter'; chapter: Chapter } | { type: 'divider'; label: string };
@@ -172,7 +172,7 @@
     <!-- Banner -->
     <div
       class="banner"
-      style="background-image: url('{detail.backgroundImageUrl}')"
+      style:background-image={'url(' + (detail.backgroundImageUrl ?? '') + ')'}
     >
       <div class="banner-overlay">
         <h1 class="banner-title">{title?.name ?? ''}</h1>
@@ -224,8 +224,13 @@
             bind:this={listContainer}
           >
             <!-- spacer to maintain correct scroll height -->
-            <div style="height: {totalHeight}px; position: relative;">
-              <div style="position: absolute; top: {offsetTop}px; left: 0; right: 0;">
+            <div style:height={totalHeight + 'px'} style:position="relative">
+              <div
+                style:position="absolute"
+                style:top={offsetTop + 'px'}
+                style:left="0"
+                style:right="0"
+              >
                 {#each visibleRows as row, i (visibleStart + i)}
                   {#if row.type === 'divider'}
                     <div class="chapter-divider">{row.label}</div>
@@ -236,7 +241,6 @@
                       class:is-read={readSet.has(ch.chapterId)}
                       class:is-last-read={ch.chapterId === lastReadId}
                       href="/reader/{ch.chapterId}"
-                      onclick={(e) => openChapter(ch.chapterId, e)}
                     >
                       <div class="chapter-meta">
                         <span class="chapter-name">{ch.name}</span>
