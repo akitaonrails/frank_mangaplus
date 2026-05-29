@@ -295,9 +295,11 @@
 
   .banner {
     /* Tall + image-backed when we have a backgroundImageUrl; short and
-       just-the-title when we don't. The .banner-overlay's gradient
-       handles the readable-text contrast either way. */
-    min-height: 64px;
+       just-the-title when we don't. min-height must be enough for the
+       overlay's h1 + author line + its top/bottom padding (the overlay
+       uses justify-content: flex-end, so anything taller than the
+       banner spills UPWARD into the header — caught by a screenshot). */
+    min-height: 110px;
     background-size: cover;
     background-position: center 30%;
     background-repeat: no-repeat;
