@@ -40,7 +40,9 @@ async fn main() {
             if let Some(first) = view.pages.iter().find_map(|p| p.data.as_ref().and_then(|d| match d {
                 mangaplus_api::proto::page::Data::MangaPage(m) => Some(m),
             })) {
-                println!("  first image: {}x{}  url={}...", first.width, first.height, &first.image_url[..first.image_url.len().min(80)]);
+                println!("  first image: {}x{}", first.width, first.height);
+                println!("  FULL URL: {}", first.image_url);
+                println!("  encryption_key: {:?}", first.encryption_key);
             }
         }
         Err(e) => println!("get_chapter_pages error: {e}"),

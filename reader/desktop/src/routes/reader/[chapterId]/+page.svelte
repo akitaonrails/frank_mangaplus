@@ -31,6 +31,7 @@
       mangaPages = (v.pages ?? [])
         .map(p => p.data?.mangaPage)
         .filter((mp): mp is MangaPage => !!mp);
+      console.log('[reader] got', mangaPages.length, 'pages. First URL:', mangaPages[0]?.imageUrl);
       // Persist read state — chapter is considered "opened" the moment the
       // server actually returned its pages (so we don't mark broken chapters
       // as read on transient errors).
