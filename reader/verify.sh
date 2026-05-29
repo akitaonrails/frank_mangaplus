@@ -19,13 +19,16 @@ step() { printf '\n\033[1;34m==>\033[0m %s\n' "$1"; }
 ok()   { printf '   \033[1;32m✓\033[0m %s\n' "$1"; }
 fail() { printf '   \033[1;31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 
-step "1/5  cargo test -p mangaplus-api  (fixture tests)"
+step "1/5  cargo test -p mangaplus-api  +  clippy -D warnings"
+# Run the EXACT commands CI runs, so a green local run means a green CI run.
 cargo test -p mangaplus-api --quiet 2>&1 | tail -3
-ok "api unit tests pass"
+cargo clippy -p mangaplus-api -- -D warnings 2>&1 | tail -3
+ok "api unit tests + clippy pass"
 
-step "2/5  cargo check -p mangaplus-desktop  (Tauri backend type check)"
+step "2/5  cargo check -p mangaplus-desktop  +  clippy"
 cargo check -p mangaplus-desktop --quiet 2>&1 | tail -3
-ok "Tauri backend compiles"
+cargo clippy -p mangaplus-desktop -- -D warnings 2>&1 | tail -3
+ok "Tauri backend compiles + clippy passes"
 
 step "3/5  bun run check  (svelte-check TS)"
 # svelte-check has some pre-existing warnings; only fail on hard errors.

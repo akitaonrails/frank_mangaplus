@@ -9,6 +9,12 @@
 //! at construction time.
 
 pub mod proto {
+    // The generated code can't be edited; silence lints that fire on it.
+    // `large_enum_variant` triggers because Response's success variant
+    // (a TitleDetailView etc.) is much bigger than the error variant.
+    // Boxing isn't worth the API churn at the size of data we're dealing with.
+    #![allow(clippy::large_enum_variant)]
+    #![allow(clippy::derive_partial_eq_without_eq)]
     include!(concat!(env!("OUT_DIR"), "/mangaplus.rs"));
 }
 
