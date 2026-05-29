@@ -34,9 +34,11 @@
     background: #111;
     border-bottom: 1px solid var(--border);
     display: flex;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 24px;
     padding: 0 20px;
+    overflow: hidden;
   }
 
   .brand {
@@ -44,6 +46,12 @@
     font-weight: 800;
     letter-spacing: 0.05em;
     color: var(--accent);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  nav {
+    flex-shrink: 0;
   }
 
   nav {

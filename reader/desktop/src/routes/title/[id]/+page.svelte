@@ -187,6 +187,7 @@
     <!-- Banner -->
     <div
       class="banner"
+      class:has-image={!!detail.backgroundImageUrl}
       style:background-image={bannerCss}
     >
       <div class="banner-overlay">
@@ -293,10 +294,18 @@
   }
 
   .banner {
-    height: 220px;
+    /* Tall + image-backed when we have a backgroundImageUrl; short and
+       just-the-title when we don't. The .banner-overlay's gradient
+       handles the readable-text contrast either way. */
+    min-height: 64px;
     background-size: cover;
     background-position: center 30%;
+    background-repeat: no-repeat;
     position: relative;
+  }
+
+  .banner.has-image {
+    height: 220px;
   }
 
   .banner-overlay {
