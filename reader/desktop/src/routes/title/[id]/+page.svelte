@@ -1,8 +1,14 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import type { TitleDetailView, Chapter } from '$lib/types';
+  import {
+    getReadChapters,
+    getLastReadChapter,
+    getSortDescending,
+    setSortDescending,
+  } from '$lib/readState';
 
   const LANG = 'eng';
   const CLANG = 'eng';
@@ -15,6 +21,9 @@
   let detail = $state<TitleDetailView | null>(null);
   let isFavorited = $state(false);
   let favPending = $state(false);
+  let sortDesc = $state(true);
+  let readSet = $state<Set<number>>(new Set());
+  let lastReadId = $state<number | null>(null);
 
   // Flattened chapter list for rendering
   type ChapterRow = { type: 'chapter'; chapter: Chapter } | { type: 'divider'; label: string };
@@ -32,7 +41,17 @@
   let visibleRows = $derived(rows.slice(visibleStart, visibleEnd));
 
   onMount(async () => {
+    sortDesc = getSortDescending();
     await loadDetail();
+  });
+
+  // Reload read-state and rows whenever titleId / sortDesc change.
+  $effect(() => {
+    if (detail) {
+      readSet = getReadChapters(titleId);
+      lastReadId = getLastReadChapter(titleId);
+      buildRows(detail);
+    }
   });
 
   async function loadDetail() {
@@ -47,6 +66,8 @@
         countryCode: COUNTRY,
       });
       detail = d;
+      readSet = getReadChapters(id);
+      lastReadId = getLastReadChapter(id);
       buildRows(d);
     } catch (e) {
       error = String(e);
@@ -56,31 +77,39 @@
   }
 
   function buildRows(d: TitleDetailView) {
-    const built: ChapterRow[] = [];
+    let chapters: Chapter[] = [];
+    let dividers: { afterIndex: number; label: string }[] = [];
+
     if (d.chapterListV2 && d.chapterListV2.length > 0) {
-      for (const ch of d.chapterListV2) {
-        built.push({ type: 'chapter', chapter: ch });
-      }
+      chapters = [...d.chapterListV2];
     } else if (d.chapterListGroup) {
       const grp = d.chapterListGroup;
-      const sections: [string, Chapter[]][] = [
-        [grp.chapterNumbers, [
-          ...grp.firstChapterList,
-          ...grp.midChapterList,
-          ...grp.lastChapterList,
-        ]],
+      chapters = [
+        ...grp.firstChapterList,
+        ...grp.midChapterList,
+        ...grp.lastChapterList,
       ];
-      for (const [label, chapters] of sections) {
-        if (chapters.length > 0) {
-          built.push({ type: 'divider', label });
-          for (const ch of chapters) {
-            built.push({ type: 'chapter', chapter: ch });
-          }
-        }
+      if (grp.chapterNumbers) {
+        dividers.push({ afterIndex: -1, label: grp.chapterNumbers });
       }
     }
+
+    // Server returns ascending (oldest → newest). Reverse for descending.
+    if (sortDesc) chapters.reverse();
+
+    const built: ChapterRow[] = [];
+    for (const div of dividers) if (div.afterIndex === -1) built.push({ type: 'divider', label: div.label });
+    for (const ch of chapters) built.push({ type: 'chapter', chapter: ch });
+
     rows = built;
     visibleEnd = Math.min(50, rows.length);
+    if (listContainer) listContainer.scrollTop = 0;
+  }
+
+  function toggleSort() {
+    sortDesc = !sortDesc;
+    setSortDescending(sortDesc);
+    if (detail) buildRows(detail);
   }
 
   function onScroll(e: Event) {
@@ -156,7 +185,17 @@
 
       <!-- Right column: virtual chapter list -->
       <section class="chapter-section">
-        <h2 class="section-heading">Chapters ({rows.filter(r => r.type === 'chapter').length})</h2>
+        <div class="chapter-header">
+          <h2 class="section-heading">Chapters ({rows.filter(r => r.type === 'chapter').length})</h2>
+          <div class="chapter-actions">
+            {#if lastReadId != null}
+              <a class="continue-link" href="/reader/{lastReadId}">Continue ▶</a>
+            {/if}
+            <button class="sort-btn" onclick={toggleSort} title="Toggle sort order">
+              {sortDesc ? '↓ Newest first' : '↑ Oldest first'}
+            </button>
+          </div>
+        </div>
         {#if rows.length === 0}
           <p class="no-chapters">No chapters available.</p>
         {:else}
@@ -175,6 +214,8 @@
                     {@const ch = row.chapter}
                     <a
                       class="chapter-row"
+                      class:is-read={readSet.has(ch.chapterId)}
+                      class:is-last-read={ch.chapterId === lastReadId}
                       href="/reader/{ch.chapterId}"
                     >
                       <div class="chapter-meta">
@@ -182,8 +223,11 @@
                         {#if ch.isUpdated}
                           <span class="badge badge-new">New</span>
                         {/if}
-                        {#if ch.alreadyViewed}
+                        {#if readSet.has(ch.chapterId)}
                           <span class="badge badge-read">Read</span>
+                        {/if}
+                        {#if ch.chapterId === lastReadId}
+                          <span class="badge badge-last">Last opened</span>
                         {/if}
                       </div>
                       {#if ch.subTitle}
@@ -365,6 +409,65 @@
     font-size: 0.8rem;
     color: var(--text-muted);
     margin-top: 3px;
+  }
+
+  .chapter-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    gap: 10px;
+  }
+
+  .chapter-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sort-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+  }
+
+  .sort-btn:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+  }
+
+  .continue-link {
+    background: var(--accent);
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    text-decoration: none;
+    font-weight: 600;
+  }
+
+  .continue-link:hover {
+    opacity: 0.9;
+  }
+
+  .chapter-row.is-read .chapter-name,
+  .chapter-row.is-read .chapter-subtitle {
+    color: var(--text-muted);
+  }
+
+  .chapter-row.is-last-read {
+    background: rgba(59, 130, 246, 0.08);
+    border-left: 3px solid var(--accent);
+  }
+
+  .badge-last {
+    background: var(--accent);
+    color: #fff;
   }
 
   @media (max-width: 640px) {

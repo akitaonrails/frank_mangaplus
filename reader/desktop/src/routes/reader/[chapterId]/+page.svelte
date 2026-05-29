@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import type { MangaViewer, MangaPage } from '$lib/types';
+  import { markChapterRead } from '$lib/readState';
 
   let loading = $state(true);
   let error = $state('');
@@ -30,6 +31,12 @@
       mangaPages = (v.pages ?? [])
         .map(p => p.data?.mangaPage)
         .filter((mp): mp is MangaPage => !!mp);
+      // Persist read state — chapter is considered "opened" the moment the
+      // server actually returned its pages (so we don't mark broken chapters
+      // as read on transient errors).
+      if (v.titleId && v.chapterId) {
+        markChapterRead(v.titleId, v.chapterId);
+      }
     } catch (e) {
       error = String(e);
     } finally {
