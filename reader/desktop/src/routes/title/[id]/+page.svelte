@@ -2,7 +2,8 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import type { TitleDetailView, Chapter } from '$lib/types';
+  import { goto } from '$app/navigation';
+  import type { TitleDetailView, Chapter, SubscribedTitlesView } from '$lib/types';
   import {
     getReadChapters,
     getLastReadChapter,
@@ -69,6 +70,15 @@
       readSet = getReadChapters(id);
       lastReadId = getLastReadChapter(id);
       buildRows(d);
+
+      // Check if this title is already in the user's library so the
+      // Add/Remove button reflects truth instead of starting at "Add".
+      try {
+        const favs = await invoke<SubscribedTitlesView>('get_favorites');
+        isFavorited = (favs.titles ?? []).some(t => t.titleId === id);
+      } catch (e) {
+        console.warn('fetching favorites failed:', e);
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -110,6 +120,15 @@
     sortDesc = !sortDesc;
     setSortDescending(sortDesc);
     if (detail) buildRows(detail);
+  }
+
+  function openChapter(chapterId: number, e?: MouseEvent) {
+    console.log('[title] openChapter clicked', chapterId);
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    goto(`/reader/${chapterId}`);
   }
 
   function onScroll(e: Event) {
@@ -175,7 +194,7 @@
           onclick={toggleFavorite}
           disabled={favPending}
         >
-          {isFavorited ? '♥ In Library' : '♡ Add to Library'}
+          {isFavorited ? '♥ Remove from Library' : '♡ Add to Library'}
         </button>
 
         {#if detail.overview}
@@ -217,6 +236,7 @@
                       class:is-read={readSet.has(ch.chapterId)}
                       class:is-last-read={ch.chapterId === lastReadId}
                       href="/reader/{ch.chapterId}"
+                      onclick={(e) => openChapter(ch.chapterId, e)}
                     >
                       <div class="chapter-meta">
                         <span class="chapter-name">{ch.name}</span>
