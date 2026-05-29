@@ -1,6 +1,9 @@
 use crate::error::{ApiError, Result};
 use crate::proto;
 use prost::Message;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 /// Default API host.
 pub const API_HOST: &str = "jumpg-api.tokyo-cdn.com";
@@ -35,6 +38,13 @@ pub struct ClientConfig {
     pub app_ver: String,
     pub os_ver: String,
     pub secret: String,
+    /// Minimum interval between outbound requests. Defensive against
+    /// accidental loops or refresh storms in the UI. Empirically the
+    /// MANGA Plus server starts returning generic "Invalid Parameter"
+    /// (code 10522) after ~10 requests in a few seconds and locks the
+    /// session out for 10+ minutes, so we self-throttle well below that.
+    /// Default: 500 ms (2 req/sec max).
+    pub min_request_interval: Duration,
 }
 
 impl ClientConfig {
@@ -44,16 +54,19 @@ impl ClientConfig {
             app_ver: APP_VER.to_string(),
             os_ver: OS_VER_DEFAULT.to_string(),
             secret: secret.into(),
+            min_request_interval: Duration::from_millis(500),
         }
     }
 }
 
-/// Thin async client. Holds a single `reqwest::Client` and the session
-/// secret. Cheap to clone if you want to hand it to multiple workers.
+/// Thin async client. Holds a single `reqwest::Client`, the session
+/// secret, and a shared throttle gate. Cheap to clone — the gate is
+/// behind an `Arc<Mutex<>>` so clones share the rate-limit state.
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     cfg: ClientConfig,
+    last_request_at: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Client {
@@ -61,7 +74,26 @@ impl Client {
         let http = reqwest::Client::builder()
             .user_agent("mangaplus-reader/0.1")
             .build()?;
-        Ok(Self { http, cfg })
+        Ok(Self {
+            http,
+            cfg,
+            last_request_at: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Block (asynchronously) until enough time has passed since the last
+    /// request to respect `min_request_interval`. Holding the mutex across
+    /// the sleep serializes burst attempts — if 10 commands fire at once,
+    /// they get released one per interval.
+    async fn throttle(&self) {
+        let mut guard = self.last_request_at.lock().await;
+        if let Some(t) = *guard {
+            let elapsed = t.elapsed();
+            if elapsed < self.cfg.min_request_interval {
+                tokio::time::sleep(self.cfg.min_request_interval - elapsed).await;
+            }
+        }
+        *guard = Some(Instant::now());
     }
 
     /// Issue a request against `/api/{path}`, automatically appending the
@@ -76,6 +108,7 @@ impl Client {
         path: &str,
         extra: &[(&str, &str)],
     ) -> Result<Vec<u8>> {
+        self.throttle().await;
         let url = format!("https://{}/api/{}", self.cfg.host, path);
         let mut req = self.http.request(method, &url).query(&[
             ("os", "android"),
