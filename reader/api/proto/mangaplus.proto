@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package mangaplus;
+
+// Top-level response wrapper used by every endpoint.
+//
+// Field numbers come from the decompiled v2.3.0 APK
+// (jp/co/comic/jump/proto/ResponseOuterClass.java line 324):
+//   "result_", "resultCase_", SuccessResult.class, ErrorResult.class
+// with the wire-format string having `<` for field 1 and
+// `<` for field 2.
+message Response {
+  oneof result {
+    SuccessResult success = 1;
+    ErrorResult   error   = 2;
+  }
+}
+
+// Minimal placeholder. Full schema will be transcribed as we wire up
+// each endpoint; prost ignores unknown fields so this is safe to grow.
+message SuccessResult {
+  // Specific view payloads will be added here as oneof cases:
+  //   FavoriteTitlesView favorite_titles_view = 42;
+  //   TitleDetailView    title_detail_view    = 7;
+  //   MangaViewer        manga_viewer         = 9;
+  //   ProfileSettingsView profile_view        = 10;
+  //   SearchView         search_view          = 34;
+}
+
+// Minimal placeholder.
+message ErrorResult {
+  // Real fields TBD when we transcribe ErrorResultOuterClass.
+  // The Java decompile shows it has code/action/english/spanish strings,
+  // popup info, etc. We'll add only what the desktop UI needs to surface.
+}

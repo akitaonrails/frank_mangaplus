@@ -1,0 +1,29 @@
+# Reverse-engineering artifacts — regeneratable, large, and not what we ship.
+# Reference only; keep them locally if you need them.
+xapk_extracted/
+jadx_output/
+rootAVD/
+*.xapk
+*.apk
+
+# Rust
+target/
+**/*.rs.bk
+
+# Node / Tauri / Vite
+node_modules/
+dist/
+.svelte-kit/
+build/
+
+# Secrets — never commit. The deviceSecret lives in your shell env / password manager.
+.env
+.env.local
+secrets/
+*.secret
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

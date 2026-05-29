@@ -1,0 +1,16 @@
+[package]
+name = "mangaplus-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Async client for the MANGA Plus mobile API (protobuf over HTTPS)"
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+reqwest = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }

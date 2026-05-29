@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["api", "desktop/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["akitaonrails"]
+
+[workspace.dependencies]
+mangaplus-api = { path = "api" }
+prost = "0.13"
+prost-build = "0.13"
+prost-types = "0.13"
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

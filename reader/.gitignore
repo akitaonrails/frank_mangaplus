@@ -1,0 +1,25 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node / Vite / Tauri
+node_modules/
+dist/
+.svelte-kit/
+build/
+
+# Lockfile-ish things kept (Cargo.lock for app crates is good)
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+
+# Secrets — never commit
+.env
+.env.local
+secrets/
+*.secret
