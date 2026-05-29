@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import type { TitleDetailView, Chapter, SubscribedTitlesView } from '$lib/types';
+  import { img } from '$lib/img';
   import {
     getReadChapters,
     getLastReadChapter,
@@ -181,7 +182,7 @@
     <!-- Banner -->
     <div
       class="banner"
-      style:background-image={'url(' + (detail.backgroundImageUrl ?? '') + ')'}
+      style:background-image={detail.backgroundImageUrl ? `url(${img(detail.backgroundImageUrl)})` : 'none'}
     >
       <div class="banner-overlay">
         <h1 class="banner-title">{title?.name ?? ''}</h1>
@@ -194,7 +195,7 @@
       <!-- Left column -->
       <aside class="detail-aside">
         {#if detail.titleImageUrl}
-          <img class="portrait" src={detail.titleImageUrl} alt={title?.name ?? ''} />
+          <img class="portrait" src={img(detail.titleImageUrl)} alt={title?.name ?? ''} />
         {/if}
 
         <button
