@@ -58,30 +58,36 @@
   async function loadDetail() {
     loading = true;
     error = '';
+    const id = parseInt($page.params.id, 10);
+    console.log('[title] loadDetail start titleId=', id);
     try {
-      const id = parseInt($page.params.id, 10);
+      console.log('[title] invoking get_title_detail...');
       const d = await invoke<TitleDetailView>('get_title_detail', {
         titleId: id,
         lang: LANG,
         clang: CLANG,
         countryCode: COUNTRY,
       });
+      console.log('[title] get_title_detail returned', { chaptersV2: d.chapterListV2?.length, hasGroup: !!d.chapterListGroup });
       detail = d;
       readSet = getReadChapters(id);
       lastReadId = getLastReadChapter(id);
       buildRows(d);
+      console.log('[title] rows built:', rows.length);
 
-      // Check if this title is already in the user's library so the
-      // Add/Remove button reflects truth instead of starting at "Add".
       try {
+        console.log('[title] invoking get_favorites...');
         const favs = await invoke<SubscribedTitlesView>('get_favorites');
         isFavorited = (favs.titles ?? []).some(t => t.titleId === id);
+        console.log('[title] favorites done, isFavorited=', isFavorited);
       } catch (e) {
-        console.warn('fetching favorites failed:', e);
+        console.warn('[title] fetching favorites failed:', e);
       }
     } catch (e) {
+      console.error('[title] loadDetail error:', e);
       error = String(e);
     } finally {
+      console.log('[title] loadDetail finally — loading=false');
       loading = false;
     }
   }
