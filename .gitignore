@@ -22,6 +22,9 @@ build/
 secrets/
 *.secret
 
+# Debug/recon scripts — ad-hoc local tooling, not part of the shipped app.
+.tmp/
+
 # OS / editor
 .DS_Store
 .idea/
