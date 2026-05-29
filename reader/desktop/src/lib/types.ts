@@ -62,7 +62,7 @@ export type MangaViewer = {
   isVerticalOnly: boolean;
   titleId: number;
   startFromRight: boolean;
-  titleLanguage: number;
+  titleLanguage: string;
 };
 
 // What /title_list/bookmark actually returns. Java method is named

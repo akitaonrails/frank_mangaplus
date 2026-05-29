@@ -135,11 +135,15 @@ message ChapterGroup {
   repeated Chapter last_chapter_list  = 4;
 }
 
-// Source: MangaViewerOuterClass.java.
+// Source: MangaViewerOuterClass.java (verified by live wire probe).
 // PAGES=1, CHAPTER_ID=2, TITLE_NAME=5, CHAPTER_NAME=6, IS_VERTICAL_ONLY=8,
-// TITLEID=9, START_FROM_RIGHT=10, USER_SUBSCRIPTION=13, TITLE_LANGUAGE=15.
+// TITLEID=9, START_FROM_RIGHT=10, TITLE_LANGUAGE=15.
+// Note: title_language is a STRING (the language code like "eng"), NOT
+// an int enum, despite the name suggesting otherwise. This was caught by
+// a runtime "invalid wire type: LengthDelimited (expected Varint)" panic.
 // chapters(3), sns(4), numberOfComments(7), regionCode(11), isHorizontalOnly(12),
-// planType(14), ratingPopup(16), titleAvailableLanguages(17), title(18) are omitted.
+// planType(14), userSubscription(13), ratingPopup(16),
+// titleAvailableLanguages(17), title(18) are omitted.
 message MangaViewer {
   repeated Page pages            = 1;
   uint32        chapter_id       = 2;
@@ -148,7 +152,7 @@ message MangaViewer {
   bool          is_vertical_only = 8;
   uint32        title_id         = 9;
   bool          start_from_right = 10;
-  int32         title_language   = 15;
+  string        title_language   = 15;
 }
 
 // Source: TitleOuterClass.java line 787.
