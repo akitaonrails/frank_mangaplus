@@ -13,6 +13,12 @@ prost = "0.13"
 prost-build = "0.13"
 prost-types = "0.13"
 reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "brotli"], default-features = false }
+# wreq fetches images with TLS fingerprint impersonation. The MANGA Plus
+# CDN at jumpg-assets3.tokyo-cdn.com rejects rustls/openssl handshakes
+# (returns 400 to curl AND reqwest); it specifically accepts Android
+# OkHttp's BoringSSL profile, which wreq can mimic.
+wreq = "6.0.0-rc.28"
+wreq-util = "3.0.0-rc.11"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

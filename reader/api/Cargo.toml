@@ -12,6 +12,8 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+wreq = { workspace = true }
+wreq-util = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
