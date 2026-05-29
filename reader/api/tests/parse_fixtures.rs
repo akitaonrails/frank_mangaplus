@@ -26,6 +26,33 @@ fn extract_data(bytes: &[u8]) -> success_result::Data {
 }
 
 const SEARCH_ENG: &[u8] = include_bytes!("fixtures/search_eng.bin");
+const PROFILE: &[u8] = include_bytes!("fixtures/profile.bin");
+const ERROR_INVALID_PARAMETER: &[u8] = include_bytes!("fixtures/error_invalid_parameter.bin");
+
+#[test]
+fn profile_decodes_to_profile_view() {
+    // The fixture is ~40 KB but our sparse proto only exposes `user_name`;
+    // the rest (icon_list, my_icon) gets discarded by prost as unknown fields.
+    // user_name may be empty if the user hasn't set a display name in the
+    // official app — what we're verifying here is just that the wire bytes
+    // route through Response → SuccessResult → ProfileSettingsView correctly.
+    let data = extract_data(PROFILE);
+    match data {
+        success_result::Data::ProfileSettingsView(_) => { /* expected */ }
+        _ => panic!("expected ProfileSettingsView"),
+    }
+}
+
+#[test]
+fn error_response_decodes_to_error_variant() {
+    use proto::response;
+    let resp = proto::Response::decode(ERROR_INVALID_PARAMETER).expect("decode");
+    match resp.result {
+        Some(response::Result::Error(_e)) => { /* expected */ }
+        Some(response::Result::Success(_)) => panic!("expected Error variant"),
+        None => panic!("missing result oneof"),
+    }
+}
 
 #[test]
 fn search_eng_decodes() {
