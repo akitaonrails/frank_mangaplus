@@ -144,7 +144,7 @@ jobs:
         with:
           projectPath: reader/desktop
           tagName: ${{ github.ref_name }}
-          releaseName: "MANGA Plus Reader ${{ github.ref_name }}"
+          releaseName: "FRANK MANGA+ ${{ github.ref_name }}"
           releaseBody: ${{ steps.release-notes.outputs.body }}
           releaseDraft: true
           prerelease: false

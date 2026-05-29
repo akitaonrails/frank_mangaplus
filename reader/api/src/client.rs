@@ -80,6 +80,12 @@ pub struct Client {
 }
 
 impl Client {
+    /// Read-only view of the config — handy for callers that need to know
+    /// whether a secret was provided, etc.
+    pub fn config(&self) -> &ClientConfig {
+        &self.cfg
+    }
+
     pub fn new(cfg: ClientConfig) -> Result<Self> {
         // CRITICAL: cookies must be enabled. The MANGA Plus API issues a
         // `plus_vw_token` cookie on manga_viewer_v3 responses (domain

@@ -174,7 +174,7 @@
 </script>
 
 <svelte:head>
-  <title>{detail?.title?.name ?? 'Title'} — MANGA+</title>
+  <title>{detail?.title?.name ?? 'Title'} — FRANK MANGA+</title>
 </svelte:head>
 
 {#if loading}

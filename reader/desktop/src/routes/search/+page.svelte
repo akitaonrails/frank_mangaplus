@@ -64,7 +64,7 @@
 </script>
 
 <svelte:head>
-  <title>Search — MANGA+</title>
+  <title>Search — FRANK MANGA+</title>
 </svelte:head>
 
 <div class="search-page">

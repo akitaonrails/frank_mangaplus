@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MANGA Plus Reader",
+  "productName": "FRANK MANGA+",
   "version": "0.1.0",
   "identifier": "com.akitaonrails.mangaplus-reader",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "MANGA Plus Reader",
+        "title": "FRANK MANGA+",
         "width": 800,
         "height": 600
       }

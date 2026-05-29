@@ -191,7 +191,7 @@
 
 <svelte:head>
   <title>
-    {initialViewer ? `${initialViewer.titleName} — ${visibleChapterName || initialViewer.chapterName}` : 'Reader'} — MANGA+
+    {initialViewer ? `${initialViewer.titleName} — ${visibleChapterName || initialViewer.chapterName}` : 'Reader'} — FRANK MANGA+
   </title>
 </svelte:head>
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import '../app.css';
   import { page } from '$app/stores';
+  import SecretSetup from '$lib/SecretSetup.svelte';
 
   let { children } = $props();
 
@@ -8,9 +9,11 @@
   let inReader = $derived($page.url.pathname.startsWith('/reader/'));
 </script>
 
+<SecretSetup />
+
 {#if !inReader}
   <header class="app-header">
-    <a href="/" class="brand">MANGA+</a>
+    <a href="/" class="brand">FRANK MANGA+</a>
     <nav>
       <a href="/" class:active={$page.url.pathname === '/'}>Library</a>
       <a href="/search" class:active={$page.url.pathname === '/search'}>Search</a>
