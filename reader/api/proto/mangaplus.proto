@@ -3,12 +3,7 @@ syntax = "proto3";
 package mangaplus;
 
 // Top-level response wrapper used by every endpoint.
-//
-// Field numbers come from the decompiled v2.3.0 APK
-// (jp/co/comic/jump/proto/ResponseOuterClass.java line 324):
-//   "result_", "resultCase_", SuccessResult.class, ErrorResult.class
-// with the wire-format string having `<` for field 1 and
-// `<` for field 2.
+// Source: ResponseOuterClass.java line 324.
 message Response {
   oneof result {
     SuccessResult success = 1;
@@ -16,20 +11,161 @@ message Response {
   }
 }
 
-// Minimal placeholder. Full schema will be transcribed as we wire up
-// each endpoint; prost ignores unknown fields so this is safe to grow.
+// SuccessResult is a large oneof with ~48 cases on the server side.
+// Only the five cases this desktop reader uses are declared here.
+// prost silently ignores all other wire fields, so this is safe.
+//
+// Field numbers from *_FIELD_NUMBER constants in SuccessResultOuterClass.java.
+// Note: these differ from the task spec by 1-3 per field; the Java constants
+// are the ground truth.
 message SuccessResult {
-  // Specific view payloads will be added here as oneof cases:
-  //   FavoriteTitlesView favorite_titles_view = 42;
-  //   TitleDetailView    title_detail_view    = 7;
-  //   MangaViewer        manga_viewer         = 9;
-  //   ProfileSettingsView profile_view        = 10;
-  //   SearchView         search_view          = 34;
+  oneof data {
+    // TITLE_DETAIL_VIEW_FIELD_NUMBER = 8
+    TitleDetailView      title_detail_view      = 8;
+    // MANGA_VIEWER_FIELD_NUMBER = 10
+    MangaViewer          manga_viewer           = 10;
+    // PROFILE_SETTINGS_VIEW_FIELD_NUMBER = 13
+    ProfileSettingsView  profile_settings_view  = 13;
+    // SEARCH_VIEW_FIELD_NUMBER = 35
+    SearchView           search_view            = 35;
+    // FAVORITE_TITLES_VIEW_FIELD_NUMBER = 43
+    FavoriteTitlesView   favorite_titles_view   = 43;
+  }
 }
 
-// Minimal placeholder.
+// Source: ErrorResultOuterClass.java line 602.
+// ACTION_FIELD_NUMBER=1, DEBUG_INFO_FIELD_NUMBER=4.
+// englishPopup(2), spanishPopup(3), popups(5) are omitted; we only need
+// enough to surface a generic error message in the UI.
 message ErrorResult {
-  // Real fields TBD when we transcribe ErrorResultOuterClass.
-  // The Java decompile shows it has code/action/english/spanish strings,
-  // popup info, etc. We'll add only what the desktop UI needs to surface.
+  int32  action     = 1;
+  string debug_info = 4;
+}
+
+// Source: ProfileSettingsViewOuterClass.java.
+// ICON_LIST_FIELD_NUMBER=1, USER_NAME_FIELD_NUMBER=2, MY_ICON_FIELD_NUMBER=3.
+// icon_list and my_icon are omitted.
+message ProfileSettingsView {
+  string user_name = 2;
+}
+
+// Source: FavoriteTitlesViewOuterClass.java.
+// AVAILABLE_LANGUAGES_FIELD_NUMBER=1, FAVORITE_TITLES_FIELD_NUMBER=2.
+// available_languages is omitted.
+message FavoriteTitlesView {
+  repeated FavoriteTitleGroup favorite_titles = 2;
+}
+
+// Source: FavoriteTitlesViewOuterClass.java inner class FavoriteTitleGroup.
+// LANGUAGE_FIELD_NUMBER=1 (Language enum stored as int32), TITLES_FIELD_NUMBER=2.
+message FavoriteTitleGroup {
+  int32          language = 1;
+  repeated Title titles   = 2;
+}
+
+// Source: SearchViewOuterClass.java.
+// TOP_SEARCH_BANNERS=1, ALL_TAGS=2, ALL_TITLES_GROUP=3, CONTENTS=5, ALL_LABELS=6.
+// Only contents(5) is exposed; the client filters titles by query locally.
+message SearchView {
+  repeated SearchContents contents = 5;
+}
+
+// Source: SearchViewOuterClass.java inner class Contents.
+// BANNER=1, TITLE_LIST=2, RANKED_TITLES=3, ALL_LABELS=4, CHAPTER_PAGES_LIST=5.
+// Only title_list(2) is exposed.
+message SearchContents {
+  TitleList title_list = 2;
+}
+
+// Source: TitleListOuterClass.java.
+// LIST_NAME=1, FEATURED_TITLES=2, CONTAINER_ID=3.
+message TitleList {
+  string         list_name       = 1;
+  repeated Title featured_titles = 2;
+}
+
+// Source: TitleDetailViewOuterClass.java.
+// TITLE=1, TITLE_IMAGE_URL=2, OVERVIEW=3, BACKGROUND_IMAGE_URL=4,
+// IS_SUBSCRIBED=15, CHAPTER_LIST_V2=38.
+// All other fields (banners, SNS, tickets, labels, etc.) are omitted.
+message TitleDetailView {
+  Title            title                = 1;
+  string           title_image_url      = 2;
+  string           overview             = 3;
+  string           background_image_url = 4;
+  bool             is_subscribed        = 15;
+  repeated Chapter chapter_list_v2      = 38;
+}
+
+// Source: MangaViewerOuterClass.java.
+// PAGES=1, CHAPTER_ID=2, TITLE_NAME=5, CHAPTER_NAME=6, IS_VERTICAL_ONLY=8,
+// TITLEID=9, START_FROM_RIGHT=10, USER_SUBSCRIPTION=13, TITLE_LANGUAGE=15.
+// chapters(3), sns(4), numberOfComments(7), regionCode(11), isHorizontalOnly(12),
+// planType(14), ratingPopup(16), titleAvailableLanguages(17), title(18) are omitted.
+message MangaViewer {
+  repeated Page pages            = 1;
+  uint32        chapter_id       = 2;
+  string        title_name       = 5;
+  string        chapter_name     = 6;
+  bool          is_vertical_only = 8;
+  uint32        title_id         = 9;
+  bool          start_from_right = 10;
+  int32         title_language   = 15;
+}
+
+// Source: TitleOuterClass.java line 787.
+// All 9 fields from the newMessageInfo schema.
+message Title {
+  uint32 title_id            = 1;
+  string name                = 2;
+  string author              = 3;
+  string portrait_image_url  = 4;
+  string landscape_image_url = 5;
+  uint32 view_count          = 6;
+  int32  language            = 7;
+  int32  title_update_status = 8;
+  string favorite_image_url  = 9;
+}
+
+// Source: ChapterOuterClass.java line 858.
+// Fields 1-12, 15, 16 declared. view_count(13) and comment_count(14) are
+// intentionally omitted to keep the struct small; prost skips them on the wire.
+message Chapter {
+  uint32 title_id               = 1;
+  uint32 chapter_id             = 2;
+  string name                   = 3;
+  string sub_title              = 4;
+  string thumbnail_url          = 5;
+  uint32 start_time_stamp       = 6;
+  uint32 end_time_stamp         = 7;
+  bool   already_viewed         = 8;
+  bool   is_vertical_only       = 9;
+  uint32 chapter_ticket_endtime = 10;
+  bool   viewed_for_free        = 11;
+  bool   is_horizontal_only     = 12;
+  bool   is_updated             = 15;
+  int32  chapter_type           = 16;
+}
+
+// Source: PageOuterClass.java line 3328.
+// Page is a oneof with five cases: manga_page(1), banner_list(2), last_page(3),
+// advertisement(4), insert_banner_list(5).
+// Only manga_page is modelled; the others are inter-chapter UI elements that
+// the reader skips by treating absent oneof as no-op.
+message Page {
+  oneof data {
+    MangaPage manga_page = 1;
+  }
+}
+
+// Source: PageOuterClass.java MangaPage class, newMessageInfo line 726.
+// IMAGE_URL=1, WIDTH=2, HEIGHT=3, TYPE=4, ENCRYPTION_KEY=5, MERCH_STORE_URL=6.
+// encryption_key is always empty in v2.3.0 but retained for documentation.
+// merch_store_url is omitted.
+message MangaPage {
+  string image_url      = 1;
+  uint32 width          = 2;
+  uint32 height         = 3;
+  int32  type           = 4;
+  string encryption_key = 5;
 }
