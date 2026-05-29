@@ -2,7 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import type { SubscribedTitlesView, Title } from '$lib/types';
-  import { img } from '$lib/img';
+  import { proxied } from '$lib/img';
 
   let loading = $state(true);
   let error = $state('');
@@ -49,7 +49,7 @@
           href="/title/{title.titleId}?lang={langCode(title.language)}"
         >
           <img
-            src={img(title.portraitImageUrl)}
+            src={proxied(title.portraitImageUrl)}
             alt={title.name}
             loading="lazy"
           />

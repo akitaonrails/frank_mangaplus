@@ -2,7 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import type { SearchView, Title } from '$lib/types';
-  import { img } from '$lib/img';
+  import { proxied } from '$lib/img';
 
   let loading = $state(true);
   let error = $state('');
@@ -91,7 +91,7 @@
     <div class="title-grid">
       {#each filtered as title (title.titleId)}
         <a class="title-card" href="/title/{title.titleId}">
-          <img src={img(title.portraitImageUrl)} alt={title.name} loading="lazy" />
+          <img src={proxied(title.portraitImageUrl)} alt={title.name} loading="lazy" />
           <div class="card-info">
             <div class="card-name">{title.name}</div>
             <div class="card-author">{title.author}</div>
