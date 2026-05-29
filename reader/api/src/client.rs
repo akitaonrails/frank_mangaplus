@@ -12,8 +12,12 @@ pub const API_HOST: &str = "jumpg-api.tokyo-cdn.com";
 /// reverse-engineered (v2.3.0 = versionCode 250).
 pub const APP_VER: &str = "250";
 
-/// `os_ver` query param. Server doesn't seem to validate the exact value.
-pub const OS_VER_DEFAULT: &str = "33";
+/// `os_ver` query param. The Android `Build.VERSION.SDK_INT` value the
+/// app sends — set to match what the AVD's MANGA Plus actually transmits.
+/// Empirical: `33` works for the catalog/profile endpoints but the
+/// premium image CDN (jumpg-assets3) returns 400 for old values. The
+/// AVD running API 36 (Android 16) sends `36` and the CDN accepts it.
+pub const OS_VER_DEFAULT: &str = "36";
 
 /// Subset of MANGA Plus language codes we use. The wire format is a
 /// language string like "eng"/"esp"/"fra"/etc.; we accept &str for
@@ -71,14 +75,44 @@ pub struct Client {
 
 impl Client {
     pub fn new(cfg: ClientConfig) -> Result<Self> {
+        // CRITICAL: cookies must be enabled. The MANGA Plus API issues a
+        // `plus_vw_token` cookie on manga_viewer_v3 responses (domain
+        // .tokyo-cdn.com, SameSite=None, HttpOnly) that must be sent on
+        // every subsequent image fetch from jumpg-assets3, or the CDN
+        // returns 400. The decompiled app uses an OkHttp CookieJar that
+        // stores ALL cookies across hosts — we mirror that here.
+        //
+        // User-Agent must look like Android OkHttp; arbitrary UAs (e.g.
+        // "reqwest/0.12") get the same 400.
         let http = reqwest::Client::builder()
-            .user_agent("mangaplus-reader/0.1")
+            .user_agent("okhttp/4.12.0")
+            .cookie_store(true)
             .build()?;
         Ok(Self {
             http,
             cfg,
             last_request_at: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Fetch an image from the MANGA Plus CDN. Returns (bytes, content-type).
+    /// The cookie acquired on a recent API call (e.g. get_chapter_pages) is
+    /// reused automatically via the cookie store.
+    pub async fn fetch_image(&self, url: &str) -> Result<(Vec<u8>, String)> {
+        self.throttle().await;
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("image/webp")
+            .to_string();
+        if !status.is_success() {
+            return Err(ApiError::Status(status.as_u16()));
+        }
+        let bytes = resp.bytes().await?.to_vec();
+        Ok((bytes, content_type))
     }
 
     /// Block (asynchronously) until enough time has passed since the last

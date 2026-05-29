@@ -1,5 +1,6 @@
 use mangaplus_api::{proto, Client, ClientConfig};
 use std::sync::Arc;
+use tauri::http::Response;
 
 /// Shared state held by Tauri and handed to every command invocation.
 struct AppState {
@@ -100,11 +101,44 @@ async fn get_chapter_pages(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let secret = read_secret();
-    let client = Client::new(ClientConfig::new(secret)).expect("build api client");
-    let state = AppState { client: Arc::new(client) };
+    let client = Arc::new(Client::new(ClientConfig::new(secret)).expect("build api client"));
+    let state = AppState { client: client.clone() };
+    let client_for_scheme = client.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // mpimg:// custom protocol — proxies image fetches through our Rust
+        // client so the plus_vw_token cookie (issued on the API call)
+        // threads through to the CDN. Without this proxy the WebView's
+        // <img> tags hit jumpg-assets3 cookieless and get 400. The CDN
+        // also rejects non-OkHttp-looking User-Agents, which our client
+        // sets to "okhttp/4.12.0".
+        //
+        // Frontend usage: replace the `https://` of imageUrl with `mpimg://`.
+        .register_asynchronous_uri_scheme_protocol("mpimg", move |_ctx, request, responder| {
+            let url = request.uri().to_string();
+            let https_url = url.replacen("mpimg://", "https://", 1);
+            let client = client_for_scheme.clone();
+            tauri::async_runtime::spawn(async move {
+                let resp = match client.fetch_image(&https_url).await {
+                    Ok((bytes, ct)) => Response::builder()
+                        .header("Content-Type", ct)
+                        // tell the WebView it can cache aggressively;
+                        // CDN URLs are signed and effectively immutable.
+                        .header("Cache-Control", "public, max-age=86400")
+                        .body(bytes)
+                        .unwrap_or_else(|_| Response::new(b"build-resp-err".to_vec())),
+                    Err(e) => {
+                        eprintln!("[mpimg] fetch failed for {https_url}: {e}");
+                        Response::builder()
+                            .status(500)
+                            .body(format!("fetch error: {e}").into_bytes())
+                            .unwrap_or_else(|_| Response::new(b"err".to_vec()))
+                    }
+                };
+                responder.respond(resp);
+            });
+        })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             get_profile,

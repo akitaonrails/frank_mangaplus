@@ -144,7 +144,7 @@
       <div class="page-stack">
         {#each mangaPages as mp, i (i)}
           <img
-            src={mp.imageUrl}
+            src={mp.imageUrl.replace(/^https:/, 'mpimg:')}
             alt="Page {i + 1}"
             width={mp.width || undefined}
             height={mp.height || undefined}
