@@ -349,21 +349,25 @@
   }
 
   .page-frame {
-    /* Each frame fills the visible reader area exactly. */
-    height: calc(100vh - 48px - 32px); /* viewport - header - footer */
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    /* Size to the contained image — no fixed viewport-height frame.
+       That used to letterbox shorter/landscape pages with equal top+
+       bottom whitespace, which the user (rightly) read as a huge gap.
+       Now the frame is just-the-image, and the only inter-page gap is
+       the margin below. */
+    width: auto;
+    max-width: 100%;
+    margin: 0 auto 4px;
+    display: block;
     position: relative;
-    /* Small gap below before the next frame snaps in. */
-    margin-bottom: 4px;
     scroll-snap-align: start;
     scroll-snap-stop: always;
   }
 
   .manga-page {
-    max-height: 100%;
+    /* Cap a single page to the visible reader area (viewport minus
+       header + footer + a little for the gap). Width is then
+       proportional via the image's intrinsic aspect ratio. */
+    max-height: calc(100vh - 48px - 32px - 4px);
     max-width: 100%;
     width: auto;
     height: auto;
