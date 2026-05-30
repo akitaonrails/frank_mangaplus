@@ -62,13 +62,25 @@ export function setSortDescending(v: boolean) {
   localStorage.setItem(KEY_SORT_DESC, v ? '1' : '0');
 }
 
-// Reader page layout: one page per frame ("single") or two pages side-by-
-// side ("double"). Default: single.
-export type PageMode = 'single' | 'double';
+// Reader page layout.
+//   - "single"       — one page per frame, the default
+//   - "double"       — sequential pairs starting from page 1: [1,2],[3,4],…
+//   - "double-cover" — first page solo, then pairs: [1],[2,3],[4,5],…
+//                      (matches printed manga where the cover is a single
+//                       page and the binding starts on the next spread)
+export type PageMode = 'single' | 'double' | 'double-cover';
 const KEY_PAGE_MODE = 'mp:pageMode';
 export function getPageMode(): PageMode {
-  return localStorage.getItem(KEY_PAGE_MODE) === 'double' ? 'double' : 'single';
+  const v = localStorage.getItem(KEY_PAGE_MODE);
+  if (v === 'double') return 'double';
+  if (v === 'double-cover') return 'double-cover';
+  return 'single';
 }
 export function setPageMode(mode: PageMode) {
   localStorage.setItem(KEY_PAGE_MODE, mode);
+}
+// Cycle order driven by the D key / toggle button: single → double →
+// double-cover → single.
+export function nextPageMode(mode: PageMode): PageMode {
+  return mode === 'single' ? 'double' : mode === 'double' ? 'double-cover' : 'single';
 }

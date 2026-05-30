@@ -9,16 +9,30 @@
   let error = $state('');
   let titles: Title[] = $state([]);
 
-  onMount(async () => {
+  // Fetch races against a generous timeout so a hung IPC call surfaces
+  // as a retry-able error instead of an infinite spinner — that was the
+  // failure mode the user hit when an in-flight throttled call stalled
+  // the page indefinitely.
+  async function load() {
+    loading = true;
+    error = '';
     try {
-      const view = await invoke<SubscribedTitlesView>('get_favorites');
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Timed out after 12 s — API may be rate-limited or unreachable')), 12_000),
+      );
+      const view = await Promise.race([
+        invoke<SubscribedTitlesView>('get_favorites'),
+        timeout,
+      ]);
       titles = view.titles ?? [];
     } catch (e) {
-      error = String(e);
+      error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
-  });
+  }
+
+  onMount(load);
 </script>
 
 <svelte:head>
@@ -31,6 +45,7 @@
   {:else if error}
     <div class="empty-state">
       <p>Failed to load favorites: {error}</p>
+      <p><button class="retry-btn" onclick={load}>↻ Retry</button></p>
     </div>
   {:else if titles.length === 0}
     <div class="empty-state">
@@ -52,5 +67,18 @@
 <style>
   .library {
     padding: 8px 0;
+  }
+  .retry-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .retry-btn:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
   }
 </style>

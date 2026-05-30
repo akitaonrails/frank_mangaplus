@@ -8,6 +8,7 @@ import {
   setSortDescending,
   getPageMode,
   setPageMode,
+  nextPageMode,
 } from './readState';
 
 // Minimal in-memory localStorage shim — vitest's jsdom-less default doesn't
@@ -24,7 +25,6 @@ function installLocalStorageStub() {
     removeItem: (k: string) => void store.delete(k),
     setItem: (k: string, v: string) => void store.set(k, v),
   };
-  // @ts-expect-error window may be undefined in pure-node test env
   globalThis.localStorage = stub;
 }
 
@@ -78,10 +78,12 @@ describe('readState', () => {
     expect(getSortDescending()).toBe(true);
   });
 
-  it('page mode defaults to single and round-trips', () => {
+  it('page mode defaults to single and round-trips all three states', () => {
     expect(getPageMode()).toBe('single');
     setPageMode('double');
     expect(getPageMode()).toBe('double');
+    setPageMode('double-cover');
+    expect(getPageMode()).toBe('double-cover');
     setPageMode('single');
     expect(getPageMode()).toBe('single');
   });
@@ -89,5 +91,11 @@ describe('readState', () => {
   it('page mode treats unknown values as single', () => {
     localStorage.setItem('mp:pageMode', 'triple');
     expect(getPageMode()).toBe('single');
+  });
+
+  it('nextPageMode cycles single → double → double-cover → single', () => {
+    expect(nextPageMode('single')).toBe('double');
+    expect(nextPageMode('double')).toBe('double-cover');
+    expect(nextPageMode('double-cover')).toBe('single');
   });
 });

@@ -8,6 +8,7 @@
     markChapterRead,
     getPageMode,
     setPageMode,
+    nextPageMode,
     type PageMode,
   } from '$lib/readState';
   import { proxied } from '$lib/img';
@@ -66,8 +67,23 @@
     }
     const groups: PageGroup[] = [];
     let i = 0;
+    // In double-cover mode the first page of each chapter ships solo so
+    // pairing starts on the next page — matches how printed manga binds
+    // a cover singly before the first spread.
+    let coverOffsetActive = pageMode === 'double-cover';
+    let currentChapter = loadedPages[0]?.chapterId;
     while (i < loadedPages.length) {
       const a = loadedPages[i];
+      if (a.chapterId !== currentChapter) {
+        currentChapter = a.chapterId;
+        if (pageMode === 'double-cover') coverOffsetActive = true;
+      }
+      if (coverOffsetActive) {
+        groups.push({ pages: [a], firstPageIndex: i });
+        coverOffsetActive = false;
+        i += 1;
+        continue;
+      }
       const b = loadedPages[i + 1];
       if (b && b.chapterId === a.chapterId) {
         groups.push({ pages: [a, b], firstPageIndex: i });
@@ -286,7 +302,7 @@
   }
 
   function togglePageMode() {
-    pageMode = pageMode === 'single' ? 'double' : 'single';
+    pageMode = nextPageMode(pageMode);
     setPageMode(pageMode);
     // After regrouping, settle on the group that contains the page
     // the user was just on, so the toggle doesn't jump them around.
@@ -367,19 +383,26 @@
     <button
       class="mode-toggle"
       onclick={togglePageMode}
-      title="Toggle single/double page (press D)"
-      aria-label={pageMode === 'single' ? 'Switch to double-page' : 'Switch to single-page'}
+      title="Cycle page layout: single → double → cover-offset (press D)"
+      aria-label="Cycle page layout"
     >
       {#if pageMode === 'single'}
-        <!-- single page icon -->
+        <!-- single page -->
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <rect x="6" y="3" width="12" height="18" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>
         </svg>
-      {:else}
-        <!-- double page icon -->
+      {:else if pageMode === 'double'}
+        <!-- two equal pages side-by-side -->
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <rect x="2"  y="4" width="9" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
           <rect x="13" y="4" width="9" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+        </svg>
+      {:else}
+        <!-- cover-offset: solo first then a pair -->
+        <svg viewBox="0 0 30 24" width="22" height="18" aria-hidden="true">
+          <rect x="1"  y="4" width="6" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+          <rect x="11" y="4" width="7" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+          <rect x="20" y="4" width="7" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
         </svg>
       {/if}
     </button>
