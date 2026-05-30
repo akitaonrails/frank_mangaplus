@@ -111,6 +111,46 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
 
+      - name: Verify Apple notary credentials
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          pw_len=${#APPLE_PASSWORD}
+          pw_dashes=$(printf %s "$APPLE_PASSWORD" | tr -cd '-' | wc -c | tr -d ' ')
+          pw_no_ws=$(printf %s "$APPLE_PASSWORD" | tr -d '[:space:]')
+          pw_no_ws_len=${#pw_no_ws}
+          id_len=${#APPLE_ID}
+          id_has_at=$(printf %s "$APPLE_ID" | grep -c '@' || true)
+          team_len=${#APPLE_TEAM_ID}
+          echo "APPLE_PASSWORD length: $pw_len (expected 19 for xxxx-xxxx-xxxx-xxxx)"
+          echo "APPLE_PASSWORD dash count: $pw_dashes (expected 3)"
+          echo "APPLE_PASSWORD length without whitespace: $pw_no_ws_len (must equal $pw_len)"
+          echo "APPLE_ID length: $id_len"
+          echo "APPLE_ID contains '@': $id_has_at (expected 1)"
+          echo "APPLE_TEAM_ID length: $team_len (expected 10)"
+          echo
+          echo "Calling xcrun notarytool history to validate against Apple..."
+          if xcrun notarytool history \
+              --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_PASSWORD"; then
+            echo "OK: Apple accepted the credentials. Proceeding to build."
+          else
+            echo
+            echo "Apple rejected the credentials. Cross-reference the format check above:"
+            echo "  - password length != 19 or dashes != 3 -> malformed app-specific password"
+            echo "  - password length != length-without-whitespace -> trailing newline/space"
+            echo "  - APPLE_ID '@' count != 1 -> not an email"
+            echo "  - team_len != 10 -> wrong Team ID"
+            echo "  - all format checks pass -> the app-specific password was revoked or"
+            echo "    does not belong to this APPLE_ID. Regenerate at:"
+            echo "    https://account.apple.com/account/manage"
+            exit 1
+          fi
+
       - name: Load release notes
         id: release-notes
         shell: bash
