@@ -58,11 +58,12 @@ Grab the build for your OS from the [Releases page](https://github.com/akitaonra
 
 | OS | File |
 |---|---|
-| Linux (AppImage) | `mangaplus-reader_*_amd64.AppImage` |
+| Linux (AppImage) | `FRANK.MANGA+_*_amd64.AppImage` |
+| Linux (.deb) | `FRANK.MANGA+_*_amd64.deb` |
 | Linux (Arch) | `yay -S mangaplus-reader-bin` |
-| macOS (Apple Silicon) | `mangaplus-reader_*_aarch64.dmg` |
-| macOS (Intel) | `mangaplus-reader_*_x64.dmg` |
-| Windows | `mangaplus-reader_*_x64-setup.exe` |
+| macOS (Apple Silicon) | `FRANK.MANGA+_*_aarch64.dmg` |
+| macOS (Intel) | `FRANK.MANGA+_*_x64.dmg` |
+| Windows | `FRANK.MANGA+_*_x64-setup.exe` |
 
 Long-form install doc: [docs/install.md](docs/install.md).
 

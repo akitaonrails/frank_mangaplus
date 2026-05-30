@@ -14,11 +14,14 @@ From the [Releases page](https://github.com/akitaonrails/frank_mangaplus/release
 
 | OS                  | File                                                    |
 |---------------------|---------------------------------------------------------|
-| Linux (AppImage)    | `mangaplus-reader_*_amd64.AppImage`                     |
+| Linux (AppImage)    | `FRANK.MANGA+_*_amd64.AppImage`                         |
+| Linux (.deb)        | `FRANK.MANGA+_*_amd64.deb`                              |
+| Linux (.rpm)        | `FRANK.MANGA+-*-1.x86_64.rpm`                           |
 | Linux (Arch / AUR)  | `yay -S mangaplus-reader-bin`                           |
-| macOS (Apple Silicon)| `mangaplus-reader_*_aarch64.dmg`                       |
-| macOS (Intel)       | `mangaplus-reader_*_x64.dmg`                            |
-| Windows             | `mangaplus-reader_*_x64-setup.exe`                      |
+| macOS (Apple Silicon)| `FRANK.MANGA+_*_aarch64.dmg`                           |
+| macOS (Intel)       | `FRANK.MANGA+_*_x64.dmg`                                |
+| Windows installer   | `FRANK.MANGA+_*_x64-setup.exe`                          |
+| Windows MSI         | `FRANK.MANGA+_*_x64_en-US.msi`                          |
 
 The Windows installer isn't code-signed. SmartScreen will probably warn the first time. Click "More info" then "Run anyway".
 

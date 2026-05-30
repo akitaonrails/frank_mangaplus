@@ -169,14 +169,18 @@ jobs:
 
           | Platform | File |
           |----------|------|
-          | Linux (AppImage) | \`mangaplus-reader_*_amd64.AppImage\` |
-          | macOS (Apple Silicon) | \`mangaplus-reader_*_aarch64.dmg\` |
-          | macOS (Intel) | \`mangaplus-reader_*_x64.dmg\` |
-          | Windows | \`mangaplus-reader_*_x64-setup.exe\` |
+          | Linux (AppImage) | \`FRANK.MANGA+_${TAG#v}_amd64.AppImage\` |
+          | Linux (.deb)     | \`FRANK.MANGA+_${TAG#v}_amd64.deb\` |
+          | Linux (.rpm)     | \`FRANK.MANGA+-${TAG#v}-1.x86_64.rpm\` |
+          | Linux (Arch / AUR) | \`yay -S mangaplus-reader-bin\` |
+          | macOS (Apple Silicon) | \`FRANK.MANGA+_${TAG#v}_aarch64.dmg\` |
+          | macOS (Intel) | \`FRANK.MANGA+_${TAG#v}_x64.dmg\` |
+          | Windows installer | \`FRANK.MANGA+_${TAG#v}_x64-setup.exe\` |
+          | Windows MSI | \`FRANK.MANGA+_${TAG#v}_x64_en-US.msi\` |
 
           ### Setup
-          1. Extract your \`deviceSecret\` from a MANGA Plus install — see \`docs/android-secret.md\` in the source repo.
-          2. Set the env var \`MANGAPLUS_SECRET=<value>\` and launch the app from your terminal, or wait for the in-app settings UI (planned).
+          1. Extract your \`deviceSecret\` from a MANGA Plus install — see [\`docs/android-secret.md\`](https://github.com/akitaonrails/frank_mangaplus/blob/main/docs/android-secret.md).
+          2. Launch the app. The first-run dialog asks for the secret — paste it in and hit Save. Full walkthrough in [\`docs/install.md\`](https://github.com/akitaonrails/frank_mangaplus/blob/main/docs/install.md).
 
           ### Windows first launch
           The installer is not code-signed. SmartScreen may show a warning — click **More info** then **Run anyway**. One-time only.
@@ -204,7 +208,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "FRANK MANGA+ ${{ github.ref_name }}"
           releaseBody: ${{ steps.release-notes.outputs.body }}
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.rust_target }}
 

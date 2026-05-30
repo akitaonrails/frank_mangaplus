@@ -33,7 +33,7 @@ jobs:
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.version }}"
-          FILENAME="mangaplus-reader_${VERSION}_amd64.AppImage"
+          FILENAME="FRANK.MANGA+_${VERSION}_amd64.AppImage"
           URL="https://github.com/akitaonrails/frank_mangaplus/releases/download/${TAG}/${FILENAME}"
           echo "Downloading ${URL}..."
           curl -fSL -o "${FILENAME}" "${URL}"
@@ -58,7 +58,7 @@ jobs:
           provides=('mangaplus-reader')
           conflicts=('mangaplus-reader')
           options=('!strip' '!debug')
-          source=("${pkgname}-${pkgver}.AppImage::${url}/releases/download/v${pkgver}/mangaplus-reader_${pkgver}_amd64.AppImage")
+          source=("${pkgname}-${pkgver}.AppImage::${url}/releases/download/v${pkgver}/FRANK.MANGA+_${pkgver}_amd64.AppImage")
           sha256sums=('SHA256_PLACEHOLDER')
           noextract=("${pkgname}-${pkgver}.AppImage")
 
