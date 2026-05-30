@@ -323,26 +323,71 @@
     });
   }
 
+  // Unified navigation: every forward/back input (keys, click zones)
+  // routes through advance() so they all behave the same way at chapter
+  // boundaries. Within a chapter it's just the local group move. At the
+  // last loaded page going forward, it force-fetches the next chapter
+  // (no more silent no-op). At the first loaded page going back, it
+  // navigates to the previous chapter's URL — fresh mount, so auto-
+  // advance correctly considers the new chapter's pages.
+  async function advance(direction: 'forward' | 'back', animation: 'scroll' | 'flip') {
+    if (direction === 'forward') {
+      if (currentGroup + 1 < pageGroups.length) {
+        if (animation === 'flip') void pageFlip('forward');
+        else goToGroupIndex(currentGroup + 1);
+        return;
+      }
+      // At end of loaded scroll — pull next chapter and then jump in.
+      const lastChId = loadedPages[loadedPages.length - 1]?.chapterId;
+      if (lastChId == null) return;
+      if (nextChapterIdAfter(lastChId) == null) return; // truly end of title
+      await maybePrefetchNext(true);
+      // After append, advance into the just-loaded next chapter.
+      if (currentGroup + 1 < pageGroups.length) {
+        if (animation === 'flip') void pageFlip('forward');
+        else goToGroupIndex(currentGroup + 1);
+      }
+    } else {
+      if (currentGroup > 0) {
+        if (animation === 'flip') void pageFlip('back');
+        else goToGroupIndex(currentGroup - 1);
+        return;
+      }
+      // At the start of the loaded scroll. Navigate sideways to the
+      // previous chapter rather than trying to prepend pages — fresh
+      // mount keeps the IntersectionObserver and scroll state sane.
+      const firstChId = loadedPages[0]?.chapterId;
+      if (firstChId == null) return;
+      const prevId = prevChapterIdBefore(firstChId);
+      if (prevId == null) return;
+      const qs = new URLSearchParams();
+      if (clang !== DEFAULT_CLANG) qs.set('clang', clang);
+      if (country !== DEFAULT_COUNTRY) qs.set('country', country);
+      const suffix = qs.toString();
+      goto(`/reader/${prevId}${suffix ? '?' + suffix : ''}`);
+    }
+  }
+
   function onKey(e: KeyboardEvent) {
-    // Vertical scroll keys: keep the familiar smooth-scroll, no flip.
+    // Vertical scroll keys: smooth-scroll style, no horizontal flip.
     if (
       e.key === 'ArrowDown' || e.key === 'j' || e.key === ' ' || e.key === 'PageDown'
     ) {
       e.preventDefault();
-      goToGroupIndex(currentGroup + 1);
+      void advance('forward', 'scroll');
     } else if (
       e.key === 'ArrowUp' || e.key === 'k' || e.key === 'PageUp'
     ) {
       e.preventDefault();
-      goToGroupIndex(currentGroup - 1);
+      void advance('back', 'scroll');
     }
     // Horizontal manga-RTL keys: page-flip animation.
     else if (e.key === 'ArrowLeft') {
       e.preventDefault();
-      void pageFlip('forward');
+      void advance('forward', 'flip');
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
-      void pageFlip('back');
+      void advance('back', 'flip');
     }
     // Other shortcuts.
     else if (e.key === 'd' || e.key === 'D') {
@@ -359,11 +404,10 @@
   }
 
   // Click zones map to manga RTL: left half = forward (next), right
-  // half = back (previous). Matches the physical motion of flipping a
-  // bound manga page from right to left, so the click triggers the
-  // page-flip animation rather than the vertical smooth scroll.
+  // half = back (previous). Routes through advance() so chapter-boundary
+  // loading kicks in automatically — same code path as the arrow keys.
   function onZoneClick(direction: 'prev' | 'next') {
-    void pageFlip(direction === 'next' ? 'forward' : 'back');
+    void advance(direction === 'next' ? 'forward' : 'back', 'flip');
   }
 </script>
 
