@@ -181,10 +181,16 @@
   }
 
   // Mark chapters as read as the user scrolls through them.
+  // chapterFlashKey is bumped on each transition so the header chapter
+  // text re-mounts with the .flash class and the glow animation reruns.
   let lastMarkedChapter = $state(0);
+  let chapterFlashKey = $state(0);
   $effect(() => {
     if (visibleChapterId && visibleChapterId !== lastMarkedChapter && initialViewer) {
       markChapterRead(initialViewer.titleId, visibleChapterId);
+      // Suppress the very first flash on initial mount — only flash on
+      // genuine mid-read chapter transitions.
+      if (lastMarkedChapter !== 0) chapterFlashKey += 1;
       lastMarkedChapter = visibleChapterId;
     }
     // Also fire prefetch check whenever currentPage moves.
@@ -223,6 +229,62 @@
     frameEls[idx]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  // Horizontal page-flip animation for manga-RTL gestures (left/right
+  // click zones and ArrowLeft/ArrowRight). Distinct from goToGroupIndex
+  // which the vertical-scroll keys (Space, ArrowDown, j, PageDown) keep
+  // using — those preserve the familiar smooth-scroll feel.
+  //
+  // Three phases:
+  //  1. slide the current view off horizontally (left for forward, right
+  //     for back)
+  //  2. while the stack is off-screen, jump-scroll vertically to the
+  //     target frame and reposition the stack on the *opposite* side
+  //  3. slide the stack back to center, revealing the new frame
+  //
+  // The IntersectionObserver still updates currentGroup naturally at the
+  // end of phase 3 once the new frame is past 50% visibility.
+  let pageStackEl: HTMLElement | undefined = $state();
+  let flipping = false;
+
+  async function pageFlip(direction: 'forward' | 'back') {
+    if (flipping || !scrollRoot || !pageStackEl) return;
+    const targetGroup = currentGroup + (direction === 'forward' ? 1 : -1);
+    if (targetGroup < 0 || targetGroup >= pageGroups.length) return;
+    const targetEl = frameEls[targetGroup];
+    if (!targetEl) return goToGroupIndex(targetGroup);
+
+    flipping = true;
+    // Forward = next page = visually-left direction in manga RTL, so the
+    // current view slides off to the LEFT and the new view comes in
+    // from the RIGHT. Back is the mirror.
+    const slideOut = direction === 'forward' ? '-100%' : '100%';
+    const slideIn = direction === 'forward' ? '100%' : '-100%';
+    const DURATION = 220;
+
+    try {
+      pageStackEl.style.willChange = 'transform';
+      pageStackEl.style.transition = `transform ${DURATION}ms ease-out`;
+      pageStackEl.style.transform = `translateX(${slideOut})`;
+      await new Promise(r => setTimeout(r, DURATION));
+
+      // Mid-flip: nothing is visible, so we can jump the scroll and
+      // reset the transform without the user seeing either change.
+      pageStackEl.style.transition = 'none';
+      targetEl.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'start' });
+      pageStackEl.style.transform = `translateX(${slideIn})`;
+      void pageStackEl.offsetHeight; // force reflow so the next transition takes
+
+      pageStackEl.style.transition = `transform ${DURATION}ms ease-out`;
+      pageStackEl.style.transform = 'translateX(0)';
+      await new Promise(r => setTimeout(r, DURATION));
+    } finally {
+      pageStackEl.style.transition = '';
+      pageStackEl.style.willChange = '';
+      pageStackEl.style.transform = '';
+      flipping = false;
+    }
+  }
+
   function togglePageMode() {
     pageMode = pageMode === 'single' ? 'double' : 'single';
     setPageMode(pageMode);
@@ -238,21 +300,28 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    // Forward (next page in manga RTL = visually-left direction).
-    // Includes ArrowLeft for the RTL convention plus the conventional
-    // scroll-down keys that everyone has muscle memory for.
+    // Vertical scroll keys: keep the familiar smooth-scroll, no flip.
     if (
-      e.key === 'ArrowDown' || e.key === 'j' || e.key === ' ' ||
-      e.key === 'PageDown' || e.key === 'ArrowLeft'
+      e.key === 'ArrowDown' || e.key === 'j' || e.key === ' ' || e.key === 'PageDown'
     ) {
       e.preventDefault();
       goToGroupIndex(currentGroup + 1);
     } else if (
-      e.key === 'ArrowUp' || e.key === 'k' || e.key === 'PageUp' || e.key === 'ArrowRight'
+      e.key === 'ArrowUp' || e.key === 'k' || e.key === 'PageUp'
     ) {
       e.preventDefault();
       goToGroupIndex(currentGroup - 1);
-    } else if (e.key === 'd' || e.key === 'D') {
+    }
+    // Horizontal manga-RTL keys: page-flip animation.
+    else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      void pageFlip('forward');
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      void pageFlip('back');
+    }
+    // Other shortcuts.
+    else if (e.key === 'd' || e.key === 'D') {
       e.preventDefault();
       togglePageMode();
     } else if (e.key === 'Escape') {
@@ -267,10 +336,10 @@
 
   // Click zones map to manga RTL: left half = forward (next), right
   // half = back (previous). Matches the physical motion of flipping a
-  // bound manga page from right to left.
+  // bound manga page from right to left, so the click triggers the
+  // page-flip animation rather than the vertical smooth scroll.
   function onZoneClick(direction: 'prev' | 'next') {
-    if (direction === 'next') goToGroupIndex(currentGroup + 1);
-    else goToGroupIndex(currentGroup - 1);
+    void pageFlip(direction === 'next' ? 'forward' : 'back');
   }
 </script>
 
@@ -285,7 +354,13 @@
     <button class="back-btn" onclick={goBack}>← Back</button>
     {#if initialViewer}
       <span class="reader-title">{initialViewer.titleName}</span>
-      <span class="reader-chapter">{visibleChapterName || initialViewer.chapterName}</span>
+      <!-- {#key} re-mounts the span on each chapter transition so the
+           .flash CSS animation reruns from the start. -->
+      {#key chapterFlashKey}
+        <span class="reader-chapter" class:flash={chapterFlashKey > 0}>
+          {visibleChapterName || initialViewer.chapterName}
+        </span>
+      {/key}
     {/if}
 
     <!-- right-side controls -->
@@ -328,7 +403,7 @@
     {:else if loadedPages.length === 0}
       <div class="empty-state"><p>No pages found for this chapter.</p></div>
     {:else}
-      <div class="page-stack">
+<div class="page-stack" bind:this={pageStackEl}>
         {#each pageGroups as group, gi (gi)}
           {@const prevPageInPriorGroup =
             group.firstPageIndex > 0
@@ -444,6 +519,18 @@
     white-space: nowrap;
     flex-shrink: 1;
     min-width: 0;
+  }
+
+  /* Brief glow when a chapter transition crosses while reading, so the
+     reader sees that the header label just changed. Re-trigger handled
+     by the {#key} wrapper around the element. */
+  .reader-chapter.flash {
+    animation: chapter-flash 1.4s ease-out;
+  }
+  @keyframes chapter-flash {
+    0%   { color: var(--text-muted); text-shadow: none; }
+    15%  { color: var(--accent);     text-shadow: 0 0 12px var(--accent), 0 0 4px var(--accent); }
+    100% { color: var(--text-muted); text-shadow: none; }
   }
 
   .mode-toggle {
