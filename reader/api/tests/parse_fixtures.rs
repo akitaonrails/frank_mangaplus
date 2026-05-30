@@ -108,8 +108,8 @@ fn manga_viewer_one_piece_ch1_decodes() {
     let manga_pages: Vec<_> = view
         .pages
         .iter()
-        .filter_map(|p| p.data.as_ref().and_then(|d| match d {
-            proto::page::Data::MangaPage(m) => Some(m),
+        .filter_map(|p| p.data.as_ref().map(|d| match d {
+            proto::page::Data::MangaPage(m) => m,
         }))
         .collect();
     assert!(!manga_pages.is_empty(), "expected at least some MangaPages");

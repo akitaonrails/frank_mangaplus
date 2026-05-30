@@ -435,8 +435,7 @@ pub async fn register_new_device() -> Result<String> {
     let mut bytes = [0u8; 8];
     getrandom::getrandom(&mut bytes).map_err(|e| ApiError::Other(format!("getrandom: {e}")))?;
     let android_id = hex::encode(bytes);
-    let device_token = md5_hex(android_id.as_bytes());
-    let security_key = md5_hex(format!("{device_token}{REGISTER_SALT}").as_bytes());
+    let (device_token, security_key) = derive_register_params(&android_id);
 
     let http = reqwest::Client::builder()
         .user_agent("okhttp/4.12.0")
@@ -464,9 +463,106 @@ pub async fn register_new_device() -> Result<String> {
     })
 }
 
+/// Pure derivation of the two query params the /register endpoint expects.
+/// Split out from `register_new_device` so we can pin it in unit tests
+/// without hitting the network — a salt or MD5 regression here would
+/// silently break self-registration in CI without this test catching it.
+fn derive_register_params(android_id: &str) -> (String, String) {
+    let device_token = md5_hex(android_id.as_bytes());
+    let security_key = md5_hex(format!("{device_token}{REGISTER_SALT}").as_bytes());
+    (device_token, security_key)
+}
+
 fn md5_hex(input: &[u8]) -> String {
     use md5::{Digest, Md5};
     let mut h = Md5::new();
     h.update(input);
     hex::encode(h.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn md5_hex_known_vectors() {
+        // RFC-style known test vectors so a broken md5 crate is caught.
+        assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+    }
+
+    #[test]
+    fn register_handshake_matches_official_app() {
+        // Pin the derivation against a known android_id. If the salt
+        // changes or md5_hex breaks, self-register stops working — this
+        // test catches it offline, before the next release goes out.
+        let android_id = "0123456789abcdef";
+        let (device_token, security_key) = derive_register_params(android_id);
+        assert_eq!(device_token, "4032af8d61035123906e58e067140cc5");
+        assert_eq!(security_key, "1d296d89370e92821e55b10ef8c3b315");
+    }
+
+    #[test]
+    fn content_type_from_ext_known_extensions() {
+        assert_eq!(Client::content_type_from_ext("https://h/p/img.png"),  "image/png");
+        assert_eq!(Client::content_type_from_ext("https://h/p/img.jpg"),  "image/jpeg");
+        assert_eq!(Client::content_type_from_ext("https://h/p/img.jpeg"), "image/jpeg");
+        assert_eq!(Client::content_type_from_ext("https://h/p/img.gif"),  "image/gif");
+        assert_eq!(Client::content_type_from_ext("https://h/p/img.avif"), "image/avif");
+        assert_eq!(Client::content_type_from_ext("https://h/p/img.heic"), "image/heif");
+        assert_eq!(Client::content_type_from_ext("https://h/p/img.webp"), "image/webp");
+        // Unknown extension falls back to webp (the overwhelming case).
+        assert_eq!(Client::content_type_from_ext("https://h/p/img.xyz"), "image/webp");
+        // Query string must not confuse the extension match.
+        assert_eq!(
+            Client::content_type_from_ext("https://h/p/img.png?sig=abc"),
+            "image/png"
+        );
+    }
+
+    #[test]
+    fn cache_path_for_strips_secure_and_query() {
+        let mut cfg = ClientConfig::new("secret");
+        cfg.image_cache_dir = Some(Path::new("/tmp/cache").to_path_buf());
+        let client = Client::new(cfg).unwrap();
+
+        let cached = client
+            .cache_path_for(
+                "https://jumpg-assets3.tokyo-cdn.com/secure/title/1/chapter/2/manga_page/high/3.webp?hash=abc",
+            )
+            .unwrap();
+        assert_eq!(
+            cached,
+            Path::new("/tmp/cache/title/1/chapter/2/manga_page/high/3.webp"),
+        );
+    }
+
+    #[test]
+    fn cache_path_for_returns_none_without_cache_dir() {
+        let client = Client::new(ClientConfig::new("secret")).unwrap();
+        assert!(client
+            .cache_path_for("https://host/secure/x.webp")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn throttle_enforces_min_interval() {
+        let mut cfg = ClientConfig::new("secret");
+        cfg.min_request_interval = std::time::Duration::from_millis(40);
+        let client = Client::new(cfg).unwrap();
+
+        let start = std::time::Instant::now();
+        client.throttle().await;
+        client.throttle().await;
+        client.throttle().await;
+        let elapsed = start.elapsed();
+
+        // Three calls: first is free, next two each wait ~40ms. So total
+        // should be ≥ ~80ms. Generous lower bound to avoid CI flakes.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(70),
+            "throttle did not pace: elapsed={elapsed:?}"
+        );
+    }
 }

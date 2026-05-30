@@ -40,19 +40,18 @@
 {#if configured === false}
   <div class="overlay" role="dialog" aria-modal="true" aria-labelledby="setup-title">
     <div class="modal">
-      <h2 id="setup-title">Set up your MANGA Plus session</h2>
+      <h2 id="setup-title">Couldn't auto-register</h2>
       <p>
-        FRANK MANGA+ is a desktop reader for your <strong>existing</strong> MANGA Plus subscription.
-        It needs a <strong>deviceSecret</strong> — a 32-character token issued by the MANGA Plus
-        servers to your phone or emulator install. Without it, the API returns "Invalid Parameter"
-        on every endpoint.
+        FRANK MANGA+ normally registers itself as a free-tier device on first launch, but the
+        call to the official <code>/register</code> endpoint didn't succeed. Most likely a
+        transient network issue — close this dialog and relaunch to retry.
       </p>
       <p>
-        Full extraction walkthrough:
-        <a href="https://github.com/akitaonrails/frank_mangaplus/blob/main/docs/install.md" target="_blank" rel="noreferrer">
-          docs/install.md
-        </a>
-        (covers both rooted-phone and rooted-AVD options).
+        Or paste a <strong>deviceSecret</strong> below to use a subscriber session you've
+        already extracted from a paid phone install. The full walkthrough is in
+        <a href="https://github.com/akitaonrails/frank_mangaplus/blob/main/docs/android-secret.md" target="_blank" rel="noreferrer">
+          docs/android-secret.md
+        </a>.
       </p>
 
       <label class="field">
@@ -79,7 +78,7 @@
       <p class="muted">
         Stored on disk at <code>~/.config/mangaplus-reader/secret</code>
         (or <code>%APPDATA%\mangaplus-reader\secret</code> on Windows). Treat it like a password —
-        anyone with this value can read your subscriber content.
+        anyone with this value can read everything the session unlocks.
       </p>
     </div>
   </div>

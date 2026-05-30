@@ -5,6 +5,19 @@
   import { goto } from '$app/navigation';
   import type { MangaViewer, MangaPage, Chapter } from '$lib/types';
   import { markChapterRead } from '$lib/readState';
+  import { proxied } from '$lib/img';
+  import { DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
+
+  // Start fetching the next chapter when the user is this close (in
+  // currently-loaded pages) to the end of the loaded scroll. Tuned to
+  // overlap the network round-trip with the last couple of pages so the
+  // join is invisible.
+  const PREFETCH_TRIGGER_DISTANCE = 2;
+
+  // The reader inherits locale from the title page via URL params.
+  // Defaults apply when navigating to a chapter URL directly.
+  let clang = $derived($page.url.searchParams.get('clang') ?? DEFAULT_CLANG);
+  let country = $derived($page.url.searchParams.get('country') ?? DEFAULT_COUNTRY);
 
   // ---------- state ----------
 
@@ -59,8 +72,8 @@
         chapterId,
         imgQuality: 'super_high',
         viewerMode: 'vertical',
-        clang: 'eng',
-        countryCode: 'US',
+        clang,
+        countryCode: country,
       });
       initialViewer = v;
       // Ascending chapter order (the API sometimes returns mixed).
@@ -98,12 +111,13 @@
     return allChapters[i - 1].chapterId;
   }
 
-  // When the user is within 2 pages of the end of the last-loaded chapter,
-  // pre-fetch the next one and append. Resulting pages flow continuously.
+  // When the user is within PREFETCH_TRIGGER_DISTANCE pages of the end
+  // of the last-loaded chapter, pre-fetch the next one and append.
+  // Resulting pages flow continuously.
   async function maybePrefetchNext() {
     if (fetchingNext || loadedPages.length === 0) return;
     const distanceToEnd = loadedPages.length - currentPage;
-    if (distanceToEnd > 2) return;
+    if (distanceToEnd > PREFETCH_TRIGGER_DISTANCE) return;
 
     const lastLoadedChapter = loadedPages[loadedPages.length - 1].chapterId;
     const nextId = nextChapterIdAfter(lastLoadedChapter);
@@ -115,8 +129,8 @@
         chapterId: nextId,
         imgQuality: 'super_high',
         viewerMode: 'vertical',
-        clang: 'eng',
-        countryCode: 'US',
+        clang,
+        countryCode: country,
       });
       appendChapter(v);
     } catch (e) {
@@ -229,7 +243,7 @@
             bind:this={frameEls[i]}
           >
             <img
-              src={lp.mp.imageUrl.replace(/^https:/, 'mpimg:')}
+              src={proxied(lp.mp.imageUrl)}
               alt="Page {i + 1}"
               loading={i < 3 ? 'eager' : 'lazy'}
               decoding="async"

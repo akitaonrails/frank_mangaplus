@@ -10,10 +10,15 @@
     getSortDescending,
     setSortDescending,
   } from '$lib/readState';
+  import { proxied } from '$lib/img';
+  import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
 
-  const LANG = 'eng';
-  const CLANG = 'eng';
-  const COUNTRY = 'US';
+  // URL-controlled. Library cards encode the title's own language as a
+  // `?lang=` query param so e.g. a Portuguese title's detail view comes
+  // back in Portuguese. Falls back to the global default when absent.
+  let lang = $derived($page.url.searchParams.get('lang') ?? DEFAULT_LANG);
+  let clang = $derived($page.url.searchParams.get('clang') ?? DEFAULT_CLANG);
+  let country = $derived($page.url.searchParams.get('country') ?? DEFAULT_COUNTRY);
 
   let titleId = $derived(parseInt($page.params.id, 10));
 
@@ -39,13 +44,23 @@
 
   let bannerCss = $derived(
     detail && detail.backgroundImageUrl
-      ? 'url(' + detail.backgroundImageUrl.replace('https:', 'mpimg:') + ')'
+      ? 'url(' + proxied(detail.backgroundImageUrl) + ')'
       : 'none'
   );
 
   let totalHeight = $derived(rows.length * ITEM_HEIGHT);
   let offsetTop = $derived(visibleStart * ITEM_HEIGHT);
   let visibleRows = $derived(rows.slice(visibleStart, visibleEnd));
+
+  // Suffix appended to /reader/<id> links so the reader inherits this
+  // page's locale. Derived from clang/country so reactivity stays clean.
+  let readerSuffix = $derived.by(() => {
+    const qs = new URLSearchParams();
+    if (clang !== DEFAULT_CLANG) qs.set('clang', clang);
+    if (country !== DEFAULT_COUNTRY) qs.set('country', country);
+    const s = qs.toString();
+    return s ? '?' + s : '';
+  });
 
   onMount(async () => {
     sortDesc = getSortDescending();
@@ -65,27 +80,21 @@
     loading = true;
     error = '';
     const id = parseInt($page.params.id, 10);
-    console.log('[title] loadDetail start titleId=', id);
     try {
-      console.log('[title] invoking get_title_detail...');
       const d = await invoke<TitleDetailView>('get_title_detail', {
         titleId: id,
-        lang: LANG,
-        clang: CLANG,
-        countryCode: COUNTRY,
+        lang,
+        clang,
+        countryCode: country,
       });
-      console.log('[title] get_title_detail returned', { chaptersV2: d.chapterListV2?.length, hasGroup: !!d.chapterListGroup });
       detail = d;
       readSet = getReadChapters(id);
       lastReadId = getLastReadChapter(id);
       buildRows(d);
-      console.log('[title] rows built:', rows.length);
 
       try {
-        console.log('[title] invoking get_favorites...');
         const favs = await invoke<SubscribedTitlesView>('get_favorites');
         isFavorited = (favs.titles ?? []).some(t => t.titleId === id);
-        console.log('[title] favorites done, isFavorited=', isFavorited);
       } catch (e) {
         console.warn('[title] fetching favorites failed:', e);
       }
@@ -93,7 +102,6 @@
       console.error('[title] loadDetail error:', e);
       error = String(e);
     } finally {
-      console.log('[title] loadDetail finally — loading=false');
       loading = false;
     }
   }
@@ -138,12 +146,19 @@
   }
 
   function openChapter(chapterId: number, e?: MouseEvent) {
-    console.log('[title] openChapter clicked', chapterId);
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
-    goto('/reader/' + chapterId);
+    // Pass the title page's locale through so the reader requests pages
+    // in the same language/country tuple. Without this the reader
+    // falls back to defaults and a Portuguese title would render in
+    // English.
+    const qs = new URLSearchParams();
+    if (clang !== DEFAULT_CLANG) qs.set('clang', clang);
+    if (country !== DEFAULT_COUNTRY) qs.set('country', country);
+    const suffix = qs.toString();
+    goto('/reader/' + chapterId + (suffix ? '?' + suffix : ''));
   }
 
   function onScroll(e: Event) {
@@ -200,8 +215,12 @@
     <div class="detail-body">
       <!-- Left column -->
       <aside class="detail-aside">
-        {#if detail.titleImageUrl}
-          <img class="portrait" src={detail.titleImageUrl.replace('https:', 'mpimg:')} alt={title?.name ?? ''} />
+        {#if title?.portraitImageUrl || detail.titleImageUrl}
+          <img
+            class="portrait"
+            src={proxied(title?.portraitImageUrl ?? detail.titleImageUrl)}
+            alt={title?.name ?? ''}
+          />
         {/if}
 
         <button
@@ -224,7 +243,7 @@
           <h2 class="section-heading">Chapters ({rows.filter(r => r.type === 'chapter').length})</h2>
           <div class="chapter-actions">
             {#if lastReadId != null}
-              <a class="continue-link" href="/reader/{lastReadId}">Continue ▶</a>
+              <a class="continue-link" href="/reader/{lastReadId}{readerSuffix}">Continue ▶</a>
             {/if}
             <button class="sort-btn" onclick={toggleSort} title="Toggle sort order">
               {sortDesc ? '↓ Newest first' : '↑ Oldest first'}
@@ -256,7 +275,7 @@
                       class="chapter-row"
                       class:is-read={readSet.has(ch.chapterId)}
                       class:is-last-read={ch.chapterId === lastReadId}
-                      href="/reader/{ch.chapterId}"
+                      href="/reader/{ch.chapterId}{readerSuffix}"
                       onclick={(e) => openChapter(ch.chapterId, e)}
                     >
                       <div class="chapter-meta">

@@ -75,17 +75,25 @@ jobs:
         working-directory: reader
         run: cargo test -p mangaplus-api
 
+      - name: Run Rust tests (mangaplus-desktop)
+        working-directory: reader
+        run: cargo test -p mangaplus-desktop
+
       - name: Check Rust formatting (warn only — we don't have a committed rustfmt config yet)
         working-directory: reader
         run: cargo fmt --check || true
 
       - name: Clippy (mangaplus-api)
         working-directory: reader
-        run: cargo clippy -p mangaplus-api -- -D warnings
+        run: cargo clippy -p mangaplus-api --lib --tests -- -D warnings
 
-      - name: Cargo check (desktop, target only — full build happens in release)
+      - name: Clippy (mangaplus-desktop)
         working-directory: reader
-        run: cargo check -p mangaplus-desktop
+        run: cargo clippy -p mangaplus-desktop --lib --tests -- -D warnings
+
+      - name: Vitest (TS lib unit tests)
+        working-directory: reader/desktop
+        run: bun run test
 
       - name: Build frontend (SvelteKit static export)
         working-directory: reader/desktop

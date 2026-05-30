@@ -19,27 +19,31 @@ step() { printf '\n\033[1;34m==>\033[0m %s\n' "$1"; }
 ok()   { printf '   \033[1;32m✓\033[0m %s\n' "$1"; }
 fail() { printf '   \033[1;31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 
-step "1/5  cargo test -p mangaplus-api  +  clippy -D warnings"
+step "1/6  cargo test -p mangaplus-api  +  clippy -D warnings"
 # Run the EXACT commands CI runs, so a green local run means a green CI run.
 cargo test -p mangaplus-api --quiet 2>&1 | tail -3
-cargo clippy -p mangaplus-api -- -D warnings 2>&1 | tail -3
-ok "api unit tests + clippy pass"
+cargo clippy -p mangaplus-api --lib --tests -- -D warnings 2>&1 | tail -3
+ok "api unit + fixture tests + clippy pass"
 
-step "2/5  cargo check -p mangaplus-desktop  +  clippy"
-cargo check -p mangaplus-desktop --quiet 2>&1 | tail -3
-cargo clippy -p mangaplus-desktop -- -D warnings 2>&1 | tail -3
-ok "Tauri backend compiles + clippy passes"
+step "2/6  cargo test -p mangaplus-desktop  +  clippy"
+cargo test -p mangaplus-desktop --quiet 2>&1 | tail -3
+cargo clippy -p mangaplus-desktop --lib --tests -- -D warnings 2>&1 | tail -3
+ok "Tauri backend tests + clippy passes"
 
-step "3/5  bun run check  (svelte-check TS)"
+step "3/6  bun run test  (vitest unit tests for the TS lib)"
+( cd desktop && bun run test ) 2>&1 | tail -6
+ok "vitest passes"
+
+step "4/6  bun run check  (svelte-check TS)"
 # svelte-check has some pre-existing warnings; only fail on hard errors.
 ( cd desktop && bun run check ) 2>&1 | tail -3 || true
 ok "svelte-check ran (review output above)"
 
-step "4/5  bun run build  (production static export)"
+step "5/6  bun run build  (production static export)"
 ( cd desktop && bun run build ) 2>&1 | tail -3
 ok "production build succeeded"
 
-step "5/5  vite dev probe  (catches PostCSS style-extraction bugs)"
+step "6/6  vite dev probe  (catches PostCSS style-extraction bugs)"
 cd desktop
 # Start vite dev in background
 bun run dev > /tmp/verify-vite.log 2>&1 &

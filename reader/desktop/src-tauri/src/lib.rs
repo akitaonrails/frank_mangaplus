@@ -89,16 +89,64 @@ fn secret_file() -> PathBuf {
 /// config file. Returns an empty string if neither has a usable value —
 /// the caller may then auto-register a fresh free-tier device.
 fn read_secret() -> String {
-    if let Ok(s) = std::env::var("MANGAPLUS_SECRET") {
-        let s = s.trim().to_string();
+    resolve_secret(
+        std::env::var("MANGAPLUS_SECRET").ok().as_deref(),
+        &secret_file(),
+    )
+}
+
+/// Pure resolution: env value (if non-empty after trimming) wins, then
+/// the file contents (if readable and non-empty after trimming), else
+/// empty string. Split from `read_secret` so it's unit-testable without
+/// touching real env or filesystem.
+fn resolve_secret(env_val: Option<&str>, path: &std::path::Path) -> String {
+    if let Some(s) = env_val {
+        let s = s.trim();
         if !s.is_empty() {
-            return s;
+            return s.to_string();
         }
     }
-    if let Ok(s) = std::fs::read_to_string(secret_file()) {
+    if let Ok(s) = std::fs::read_to_string(path) {
         return s.trim().to_string();
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_secret;
+    use std::io::Write;
+
+    #[test]
+    fn env_wins_over_file() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "from-file").unwrap();
+        let resolved = resolve_secret(Some("from-env"), tmp.path());
+        assert_eq!(resolved, "from-env");
+    }
+
+    #[test]
+    fn falls_back_to_file_when_env_absent() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "  from-file").unwrap();
+        let resolved = resolve_secret(None, tmp.path());
+        assert_eq!(resolved, "from-file");
+    }
+
+    #[test]
+    fn falls_back_to_file_when_env_is_blank() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "from-file").unwrap();
+        let resolved = resolve_secret(Some("   "), tmp.path());
+        assert_eq!(resolved, "from-file");
+    }
+
+    #[test]
+    fn returns_empty_when_nothing_set() {
+        let path = std::path::Path::new("/nonexistent/path/that/does/not/exist");
+        let resolved = resolve_secret(None, path);
+        assert_eq!(resolved, "");
+    }
 }
 
 /// Register a brand-new device against the official endpoint and persist

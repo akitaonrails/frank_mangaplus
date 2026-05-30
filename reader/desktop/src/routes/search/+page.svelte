@@ -2,7 +2,8 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import type { SearchView, Title } from '$lib/types';
-  import { proxied } from '$lib/img';
+  import TitleCard from '$lib/TitleCard.svelte';
+  import { DEFAULT_LANG, DEFAULT_CLANG } from '$lib/lang';
 
   let loading = $state(true);
   let error = $state('');
@@ -22,7 +23,7 @@
 
   onMount(async () => {
     try {
-      const view = await invoke<SearchView>('search', { lang: 'eng', clang: 'eng' });
+      const view = await invoke<SearchView>('search', { lang: DEFAULT_LANG, clang: DEFAULT_CLANG });
       const seen = new Set<number>();
       const flat: Title[] = [];
       for (const content of view.contents ?? []) {
@@ -90,11 +91,8 @@
   {:else}
     <div class="title-grid">
       {#each filtered as title (title.titleId)}
-        <a class="title-card" href="/title/{title.titleId}">
-          <img src={proxied(title.portraitImageUrl)} alt={title.name} loading="lazy" />
-          <div class="card-info">
-            <div class="card-name">{title.name}</div>
-            <div class="card-author">{title.author}</div>
+        <TitleCard {title}>
+          {#snippet action()}
             <button
               class="fav-btn"
               class:confirmed={confirmMap.has(title.titleId)}
@@ -102,8 +100,8 @@
             >
               {confirmMap.get(title.titleId) ?? '+ Library'}
             </button>
-          </div>
-        </a>
+          {/snippet}
+        </TitleCard>
       {/each}
     </div>
   {/if}

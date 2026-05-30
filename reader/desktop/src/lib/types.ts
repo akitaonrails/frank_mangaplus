@@ -1,13 +1,14 @@
+// TS mirror of the proto types the Tauri commands deserialize. The Rust
+// side (api/src/lib.rs::proto) is the ground truth — these types only
+// include the fields the UI actually reads. Anything else the server
+// sends still arrives on the wire; it's just elided from the TS model.
+
 export type Title = {
   titleId: number;
   name: string;
   author: string;
   portraitImageUrl: string;
-  landscapeImageUrl: string;
-  viewCount: number;
   language: number;
-  titleUpdateStatus: number;
-  favoriteImageUrl: string;
 };
 
 export type Chapter = {
@@ -15,16 +16,10 @@ export type Chapter = {
   chapterId: number;
   name: string;
   subTitle: string;
+  // Per-chapter thumbnail. Not currently rendered in the chapter list but
+  // wired through so we can light it up without another type change.
   thumbnailUrl: string;
-  startTimeStamp: number;
-  endTimeStamp: number;
-  alreadyViewed: boolean;
-  isVerticalOnly: boolean;
-  isHorizontalOnly: boolean;
-  chapterTicketEndtime: number;
-  viewedForFree: boolean;
   isUpdated: boolean;
-  chapterType: number;
 };
 
 export type TitleDetailView = {
@@ -57,7 +52,9 @@ export type Page = {
 export type MangaViewer = {
   pages: Page[];
   chapterId: number;
-  chapters: Chapter[];  // full chapter list of the parent title (field 3)
+  // Full chapter list of the parent title (proto field 3). Used by the
+  // reader to compute next/previous chapter for auto-advance.
+  chapters: Chapter[];
   titleName: string;
   chapterName: string;
   isVerticalOnly: boolean;
@@ -66,33 +63,17 @@ export type MangaViewer = {
   titleLanguage: string;
 };
 
-// What /title_list/bookmark actually returns. Java method is named
-// getFavoriteTitles() and the endpoint URL says "bookmark", but the
-// server response is a SubscribedTitlesView (oneof field 7) — confirmed
-// by wire-probing the live API. titles is a flat list.
+// /title_list/bookmark returns this despite the endpoint URL saying
+// "bookmark" and the Java method being named getFavoriteTitles. Confirmed
+// by wire-probing the live API.
 export type SubscribedTitlesView = {
   titles: Title[];
 };
 
-// Kept for documentation; the bookmark endpoint does NOT return this.
-export type FavoriteTitleGroup = {
-  language: number;
-  titles: Title[];
-};
-
-export type FavoriteTitlesView = {
-  favoriteTitles: FavoriteTitleGroup[];
-};
-
-export type TitleList = {
-  listName: string;
-  featuredTitles: Title[];
-};
-
-export type SearchContents = {
-  titleList?: TitleList;
-};
-
 export type SearchView = {
-  contents: SearchContents[];
+  contents: {
+    titleList?: {
+      featuredTitles: Title[];
+    };
+  }[];
 };

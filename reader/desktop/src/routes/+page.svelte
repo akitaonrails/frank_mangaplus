@@ -2,7 +2,8 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import type { SubscribedTitlesView, Title } from '$lib/types';
-  import { proxied } from '$lib/img';
+  import TitleCard from '$lib/TitleCard.svelte';
+  import { langCode } from '$lib/lang';
 
   let loading = $state(true);
   let error = $state('');
@@ -18,11 +19,6 @@
       loading = false;
     }
   });
-
-  function langCode(lang: number): string {
-    const map: Record<number, string> = { 0: 'eng', 1: 'esp', 2: 'fra', 3: 'por', 4: 'rus', 5: 'ind' };
-    return map[lang] ?? 'eng';
-  }
 </script>
 
 <svelte:head>
@@ -44,20 +40,10 @@
   {:else}
     <div class="title-grid">
       {#each titles as title (title.titleId)}
-        <a
-          class="title-card"
+        <TitleCard
+          {title}
           href="/title/{title.titleId}?lang={langCode(title.language)}"
-        >
-          <img
-            src={proxied(title.portraitImageUrl)}
-            alt={title.name}
-            loading="lazy"
-          />
-          <div class="card-info">
-            <div class="card-name">{title.name}</div>
-            <div class="card-author">{title.author}</div>
-          </div>
-        </a>
+        />
       {/each}
     </div>
   {/if}

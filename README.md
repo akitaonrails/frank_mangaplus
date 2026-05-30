@@ -5,7 +5,7 @@
 
   <p>
     <strong>A personal-use desktop reader for <a href="https://mangaplus.shueisha.co.jp/">MANGA Plus by Shueisha</a>.</strong><br>
-    Read your existing paid subscription on Linux, macOS, and Windows.
+    Read on Linux, macOS, and Windows. Free tier works out of the box; paste a subscriber secret for premium chapters.
   </p>
 
   <p>
