@@ -1,17 +1,29 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
 
+  // Three startup states this dialog handles:
+  //   1. configured === false     → auto-register failed AND no secret on disk
+  //                                  → prompt for a paste-or-retry
+  //   2. configured && autoReg    → auto-register succeeded but user hasn't
+  //                                  acknowledged the free-tier prompt
+  //                                  → offer "upgrade to subscriber" or "continue"
+  //   3. configured && !autoReg   → user-pasted secret OR already acknowledged
+  //                                  → no dialog
   let configured = $state<boolean | null>(null);
+  let autoRegistered = $state(false);
+
   let value = $state('');
   let saving = $state(false);
+  let acknowledging = $state(false);
   let error = $state('');
 
   async function check() {
     try {
       configured = await invoke<boolean>('is_configured');
+      autoRegistered = await invoke<boolean>('is_auto_registered');
     } catch (e) {
       configured = false;
-      console.warn('is_configured failed', e);
+      console.warn('is_configured/is_auto_registered failed', e);
     }
   }
 
@@ -22,6 +34,7 @@
     try {
       await invoke<void>('set_secret', { value: value.trim() });
       configured = true;
+      autoRegistered = false;
       value = '';
       // Reload so any in-flight components re-fetch with the new client.
       location.reload();
@@ -29,6 +42,18 @@
       error = String(e);
     } finally {
       saving = false;
+    }
+  }
+
+  async function continueFree() {
+    acknowledging = true;
+    try {
+      await invoke<void>('acknowledge_free_tier');
+      autoRegistered = false;
+    } catch (e) {
+      console.warn('acknowledge_free_tier failed', e);
+    } finally {
+      acknowledging = false;
     }
   }
 
@@ -82,6 +107,65 @@
       </p>
     </div>
   </div>
+{:else if configured && autoRegistered}
+  <div class="overlay" role="dialog" aria-modal="true" aria-labelledby="freetier-title">
+    <div class="modal">
+      <h2 id="freetier-title">You're reading on a free-tier session</h2>
+      <p>
+        FRANK MANGA+ couldn't find a subscriber <code>deviceSecret</code> on disk or in the
+        environment, so it registered a fresh free-tier device for you automatically. You can
+        browse the full catalog and read the chapters Shueisha offers for free — but
+        subscription-only chapters will be locked.
+      </p>
+      <p>
+        If you already pay for MANGA Plus on a phone, paste your subscriber <code>deviceSecret</code>
+        below to unlock everything that subscription covers. The full extraction walkthrough
+        is in
+        <a href="https://github.com/akitaonrails/frank_mangaplus/blob/main/docs/android-secret.md" target="_blank" rel="noreferrer">
+          docs/android-secret.md
+        </a>.
+      </p>
+
+      <label class="field">
+        <span>Paste your subscriber deviceSecret</span>
+        <input
+          type="password"
+          placeholder="32-char hex value"
+          bind:value
+          disabled={saving || acknowledging}
+          autocomplete="off"
+        />
+      </label>
+
+      {#if error}
+        <p class="error">Save failed: {error}</p>
+      {/if}
+
+      <div class="actions">
+        <button
+          class="secondary"
+          onclick={continueFree}
+          disabled={saving || acknowledging}
+        >
+          {acknowledging ? 'Dismissing…' : 'Continue with free tier'}
+        </button>
+        <button
+          class="primary"
+          onclick={save}
+          disabled={saving || acknowledging || !value.trim()}
+        >
+          {saving ? 'Saving…' : 'Save & reload'}
+        </button>
+      </div>
+
+      <p class="muted">
+        Stored on disk at <code>~/.config/mangaplus-reader/secret</code>
+        (or <code>%APPDATA%\mangaplus-reader\secret</code> on Windows). Treat it like a password —
+        anyone with this value can read everything the session unlocks. You won't see this
+        prompt again unless you delete the secret and trigger a new auto-register.
+      </p>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -123,6 +207,13 @@
     text-decoration: underline;
   }
 
+  .modal code {
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+
   .field {
     display: flex;
     flex-direction: column;
@@ -155,6 +246,7 @@
   .actions {
     display: flex;
     justify-content: flex-end;
+    gap: 8px;
     margin: 12px 0;
   }
 
@@ -169,6 +261,26 @@
   }
 
   .primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.88rem;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .secondary:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--text-muted);
+  }
+
+  .secondary:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }

@@ -28,6 +28,26 @@ fn is_configured(state: tauri::State<'_, AppState>) -> bool {
         .unwrap_or(false)
 }
 
+/// True when the current secret on disk was written by auto-register and
+/// the user hasn't yet acknowledged that they're on a free-tier session.
+/// The frontend uses this to surface a one-time upgrade-or-continue prompt.
+#[tauri::command]
+fn is_auto_registered() -> bool {
+    auto_register_flag_file().exists()
+}
+
+/// Dismiss the free-tier prompt without changing the secret. Subsequent
+/// launches won't re-show the prompt unless the user clears the secret
+/// (forcing a fresh auto-register).
+#[tauri::command]
+fn acknowledge_free_tier() -> Result<(), String> {
+    let path = auto_register_flag_file();
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("clear flag: {e}"))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn set_secret(
     state: tauri::State<'_, AppState>,
@@ -44,6 +64,9 @@ async fn set_secret(
         std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
     }
     std::fs::write(&path, &trimmed).map_err(|e| format!("write secret file: {e}"))?;
+    // User-pasted secret supersedes any prior auto-registered session,
+    // so clear the "you're on free tier" marker. Best-effort delete.
+    let _ = std::fs::remove_file(auto_register_flag_file());
     // Rebuild the API client with the new secret, applied to BOTH the
     // commands' client and the mpimg:// scheme handler's client.
     let new_client = rebuild_client(&trimmed)?;
@@ -83,6 +106,16 @@ fn config_dir() -> PathBuf {
 
 fn secret_file() -> PathBuf {
     config_dir().join("secret")
+}
+
+/// Marker file that exists exactly when the current secret on disk was
+/// written by auto-register and the user has not yet acknowledged that
+/// they're on a free-tier session. The frontend reads this flag to
+/// decide whether to surface the "you're on free tier, want to upgrade?"
+/// dialog. Cleared whenever the user either pastes a subscriber secret
+/// (set_secret) or explicitly dismisses the prompt (acknowledge_free_tier).
+fn auto_register_flag_file() -> PathBuf {
+    config_dir().join("auto-registered")
 }
 
 /// Look for a configured secret. Env var wins; falls back to the on-disk
@@ -176,6 +209,11 @@ fn auto_register_secret() -> String {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
+            // Mark the session as auto-registered + unacknowledged so the
+            // frontend can prompt the user about upgrading to subscriber.
+            // Best-effort write — if it fails the only consequence is the
+            // prompt doesn't show, the secret still works.
+            let _ = std::fs::write(auto_register_flag_file(), "");
             if let Err(e) = std::fs::write(&path, &secret) {
                 eprintln!("[mangaplus-reader] auto-register: persisting secret failed: {e}");
             }
@@ -380,6 +418,8 @@ pub fn run() {
         .manage(SchemeClientState(scheme_state))
         .invoke_handler(tauri::generate_handler![
             is_configured,
+            is_auto_registered,
+            acknowledge_free_tier,
             set_secret,
             get_profile,
             get_favorites,
