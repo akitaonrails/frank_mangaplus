@@ -175,7 +175,14 @@
                     ]
                   : [];
             if (canonical.length > allChapters.length) {
-              allChapters = [...canonical].sort((a, b) => a.chapterId - b.chapterId);
+              // Preserve title_detail's natural order — that's the
+              // publisher's intended reading order. Sorting by
+              // chapterId breaks for titles where ids aren't
+              // monotonic with chapter number; Kaiju No. 8 chapters
+              // 124/125 are a live example, where #125 has a lower
+              // id than #124 because the API reassigned ids during
+              // a re-upload at some point.
+              allChapters = [...canonical];
             }
           })
           .catch(e => console.warn('[reader] title_detail fetch failed (using viewer.chapters):', e));
