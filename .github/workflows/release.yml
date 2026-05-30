@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   build:
@@ -234,3 +235,25 @@ jobs:
           for f in reader/target/${{ matrix.rust_target }}/release/bundle/appimage/*.asc; do
             gh release upload "${{ github.ref_name }}" "$f" --clobber
           done
+
+  # After all four platform builds succeed, kick off the AUR publish.
+  # The release.published event normally chains here automatically, but
+  # GitHub suppresses downstream triggers when a release is created by
+  # GITHUB_TOKEN (anti-loop guard) — so the auto-trigger never fires
+  # when tauri-action publishes the release itself. Explicit
+  # workflow_dispatch from this job sidesteps the guard.
+  publish-aur:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch AUR publish workflow
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run aur-publish.yml \
+            -f tag="${{ github.ref_name }}" \
+            --repo "${{ github.repository }}"
