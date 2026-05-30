@@ -9,6 +9,8 @@ import {
   getPageMode,
   setPageMode,
   nextPageMode,
+  getLastReadPage,
+  setLastReadPage,
 } from './readState';
 
 // Minimal in-memory localStorage shim — vitest's jsdom-less default doesn't
@@ -97,5 +99,27 @@ describe('readState', () => {
     expect(nextPageMode('single')).toBe('double');
     expect(nextPageMode('double')).toBe('double-cover');
     expect(nextPageMode('double-cover')).toBe('single');
+  });
+
+  it('per-chapter last-read page round-trips', () => {
+    expect(getLastReadPage(42)).toBe(null);
+    setLastReadPage(42, 7);
+    expect(getLastReadPage(42)).toBe(7);
+    setLastReadPage(43, 1);
+    expect(getLastReadPage(43)).toBe(1);
+    expect(getLastReadPage(42)).toBe(7); // independent per chapter
+  });
+
+  it('per-chapter last-read page rejects non-positive values', () => {
+    setLastReadPage(11, 5);
+    setLastReadPage(11, 0);
+    expect(getLastReadPage(11)).toBe(5); // 0 ignored
+    setLastReadPage(11, -1);
+    expect(getLastReadPage(11)).toBe(5); // -1 ignored
+  });
+
+  it('per-chapter last-read page returns null for garbage in storage', () => {
+    localStorage.setItem('mp:chpage:99', 'not-a-number');
+    expect(getLastReadPage(99)).toBe(null);
   });
 });

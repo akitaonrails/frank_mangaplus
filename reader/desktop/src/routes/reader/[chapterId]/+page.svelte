@@ -9,6 +9,8 @@
     getPageMode,
     setPageMode,
     nextPageMode,
+    getLastReadPage,
+    setLastReadPage,
     type PageMode,
   } from '$lib/readState';
   import { proxied } from '$lib/img';
@@ -142,6 +144,25 @@
       allChapters = [...(v.chapters ?? [])].sort((a, b) => a.chapterId - b.chapterId);
       appendChapter(v);
       if (v.titleId && v.chapterId) markChapterRead(v.titleId, v.chapterId);
+
+      // Resume reading: if we left this chapter mid-read last time,
+      // scroll to that page. Wait for frames to bind first, then find
+      // the group containing the saved page and jump there. Suppresses
+      // the chapter-change flash since this is the initial mount.
+      const resumePage = getLastReadPage(chapterId);
+      if (resumePage && resumePage > 1) {
+        queueMicrotask(() => {
+          const targetGroup = pageGroups.findIndex(g =>
+            g.firstPageIndex <= resumePage - 1 &&
+            resumePage - 1 < g.firstPageIndex + g.pages.length
+          );
+          if (targetGroup > 0 && frameEls[targetGroup]) {
+            // 'instant' so the user lands where they were without a
+            // visible scroll animation from page 1.
+            frameEls[targetGroup].scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'start' });
+          }
+        });
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -216,6 +237,17 @@
       // genuine mid-read chapter transitions.
       if (lastMarkedChapter !== 0) chapterFlashKey += 1;
       lastMarkedChapter = visibleChapterId;
+    }
+    // Persist the user's current reading position per-chapter so
+    // re-opening this chapter later resumes here.
+    if (visibleChapterId && currentPage >= 1 && loadedPages[currentPageIndex]) {
+      // currentPage is 1-indexed across all loaded chapters; convert
+      // to chapter-local page number by subtracting the index of the
+      // chapter's first page.
+      const chapterFirstIdx = loadedPages.findIndex(p => p.chapterId === visibleChapterId);
+      if (chapterFirstIdx >= 0) {
+        setLastReadPage(visibleChapterId, currentPageIndex - chapterFirstIdx + 1);
+      }
     }
     // Also fire prefetch check whenever currentPage moves.
     void maybePrefetchNext();
@@ -534,7 +566,16 @@
         {#if fetchingNext}
           <div class="loading-next"><div class="spinner"></div><span>loading next chapter…</span></div>
         {:else if loadedPages.length > 0 && nextChapterIdAfter(loadedPages[loadedPages.length - 1].chapterId) == null}
-          <div class="end-of-title">— end of available chapters —</div>
+          <!-- True end of the title — no further chapter exists in the
+               catalog at this language/country. Make the message big
+               and obvious so the user knows the reader didn't just
+               stall on a load. -->
+          <div class="end-of-title">
+            <div class="end-of-title-glyph">🏁</div>
+            <h2>You've reached the end</h2>
+            <p>No further chapters are available right now. New releases drop on the schedule MANGA Plus publishes — check back later.</p>
+            <button class="back-to-title-btn" onclick={goBack}>Back to title page</button>
+          </div>
         {:else if loadedPages.length > 0}
           <!-- A next chapter exists but isn't loaded yet. Auto-prefetch
                normally handles this once currentPage moves to within
@@ -751,7 +792,7 @@
     margin-bottom: 4px;
   }
 
-  .loading-next, .end-of-title {
+  .loading-next {
     width: 100%;
     color: var(--text-muted);
     font-size: 0.85rem;
@@ -760,6 +801,56 @@
     flex-direction: column;
     align-items: center;
     gap: 10px;
+  }
+
+  .end-of-title {
+    width: 100%;
+    max-width: 460px;
+    margin: 80px auto;
+    padding: 40px 32px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 14px;
+  }
+
+  .end-of-title-glyph {
+    font-size: 2.6rem;
+    line-height: 1;
+  }
+
+  .end-of-title h2 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text);
+    margin: 0;
+  }
+
+  .end-of-title p {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .back-to-title-btn {
+    margin-top: 6px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 10px 22px;
+    border-radius: 6px;
+    font-size: 0.92rem;
+    font-weight: 600;
+    transition: background 0.15s;
+  }
+
+  .back-to-title-btn:hover {
+    background: var(--accent-hover);
   }
 
   .load-next-btn {

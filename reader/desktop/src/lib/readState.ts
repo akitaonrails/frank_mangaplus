@@ -39,6 +39,29 @@ export function markChapterRead(titleId: number, chapterId: number) {
   }
 }
 
+// Per-chapter page-position memory. When the user leaves a chapter
+// mid-read and comes back, the reader scrolls to this page rather than
+// starting from page 1. 1-indexed (matches the visible page indicator).
+const KEY_CHAPTER_PAGE = (chapterId: number) => `mp:chpage:${chapterId}`;
+export function getLastReadPage(chapterId: number): number | null {
+  try {
+    const raw = localStorage.getItem(KEY_CHAPTER_PAGE(chapterId));
+    if (!raw) return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 1 ? n : null;
+  } catch {
+    return null;
+  }
+}
+export function setLastReadPage(chapterId: number, page: number) {
+  try {
+    if (!Number.isFinite(page) || page < 1) return;
+    localStorage.setItem(KEY_CHAPTER_PAGE(chapterId), String(page));
+  } catch (e) {
+    console.warn('setLastReadPage failed', e);
+  }
+}
+
 export function getLastReadChapter(titleId: number): number | null {
   try {
     const raw = localStorage.getItem(KEY_LAST(titleId));
