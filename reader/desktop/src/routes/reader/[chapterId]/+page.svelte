@@ -933,7 +933,15 @@
     border-top: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
     background: rgba(0, 0, 0, 0.4);
-    scroll-snap-align: start;
+    /* No scroll-snap-align here on purpose. If the divider is a snap
+       target, the browser pulls the viewport to it at the chapter
+       boundary — leaving the divider pinned at the top of the screen
+       and the first page of the new chapter pushed partly below the
+       viewport. Space-bar advance then jumps to the page AFTER that
+       first page, and the user has to mouse-scroll through the half-
+       hidden one. Letting the divider scroll through as a transition
+       element makes both programmatic and manual scrolls land cleanly
+       on the page frame, where the snap actually belongs. */
     margin-bottom: 4px;
   }
 
