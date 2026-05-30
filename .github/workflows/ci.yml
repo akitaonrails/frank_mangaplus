@@ -38,6 +38,7 @@ jobs:
         with:
           workspaces: reader -> target
           key: ${{ matrix.platform }}
+          cache-on-failure: true
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
