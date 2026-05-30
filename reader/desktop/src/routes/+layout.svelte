@@ -13,7 +13,9 @@
 
 {#if !inReader}
   <header class="app-header">
-    <a href="/" class="brand">FRANK MANGA+</a>
+    <a href="/" class="brand" aria-label="FRANK MANGA+">
+      <img src="/logo.png" alt="FRANK MANGA+" />
+    </a>
     <nav>
       <a href="/" class:active={$page.url.pathname === '/'}>Library</a>
       <a href="/search" class:active={$page.url.pathname === '/search'}>Search</a>
@@ -42,12 +44,18 @@
   }
 
   .brand {
-    font-size: 1.1rem;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    color: var(--accent);
-    white-space: nowrap;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    height: 100%;
+    padding: 4px 0;
+  }
+
+  .brand img {
+    height: 100%;
+    width: auto;
+    display: block;
+    border-radius: 4px;
   }
 
   nav {
