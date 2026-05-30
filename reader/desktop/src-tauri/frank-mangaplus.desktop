@@ -1,0 +1,12 @@
+[Desktop Entry]
+Categories=Graphics;Viewer;
+Comment={{comment}}
+Exec={{exec}}
+GenericName=Manga Reader
+Icon={{icon}}
+Keywords=manga;comic;reader;shueisha;mangaplus;jump;
+Name={{name}}
+StartupNotify=true
+StartupWMClass={{exec}}
+Terminal=false
+Type=Application
