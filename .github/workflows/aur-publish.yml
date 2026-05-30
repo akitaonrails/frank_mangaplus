@@ -72,20 +72,37 @@ jobs:
                   "${pkgdir}/opt/mangaplus-reader/mangaplus-reader.AppImage"
 
               install -dm755 "${pkgdir}/usr/bin"
-              ln -s /opt/mangaplus-reader/mangaplus-reader.AppImage "${pkgdir}/usr/bin/mangaplus-reader"
+              # The bundle's .desktop file points at Exec=mangaplus-desktop
+              # and StartupWMClass=mangaplus-desktop (both come from the
+              # binary name Tauri uses). Symlink under that name so the
+              # launcher resolves cleanly and WM_CLASS-based taskbar
+              # grouping works. Keep mangaplus-reader as the friendlier
+              # alias users were already typing.
+              ln -s /opt/mangaplus-reader/mangaplus-reader.AppImage \
+                  "${pkgdir}/usr/bin/mangaplus-desktop"
+              ln -s /opt/mangaplus-reader/mangaplus-reader.AppImage \
+                  "${pkgdir}/usr/bin/mangaplus-reader"
 
-              if [[ -f "${srcdir}/squashfs-root/usr/share/applications/mangaplus-desktop.desktop" ]]; then
-                  install -Dm644 "${srcdir}/squashfs-root/usr/share/applications/mangaplus-desktop.desktop" \
-                      "${pkgdir}/usr/share/applications/mangaplus-reader.desktop"
-                  sed -i 's|Exec=mangaplus-desktop|Exec=mangaplus-reader|g' \
+              # Tauri names the .desktop file after productName — for v0.4.0
+              # onward that's "FRANK MANGA+", so it ships as
+              # "FRANK MANGA+.desktop" with a space and a plus sign. Find
+              # it by glob rather than hardcoding the filename (which is
+              # exactly the bug that hid the launcher through v0.5.0).
+              desktop_src=$(find "${srcdir}/squashfs-root/usr/share/applications/" \
+                  -maxdepth 1 -name '*.desktop' -print -quit)
+              if [[ -n "$desktop_src" && -f "$desktop_src" ]]; then
+                  install -Dm644 "$desktop_src" \
                       "${pkgdir}/usr/share/applications/mangaplus-reader.desktop"
               fi
 
+              # Icons keep their bundle name (mangaplus-desktop.png) so
+              # the .desktop file's Icon=mangaplus-desktop reference
+              # resolves without sed rewriting.
               for size in 32x32 128x128 256x256; do
                   for cand in "${srcdir}/squashfs-root/usr/share/icons/hicolor/${size}/apps/"*.png; do
                       [[ -f "$cand" ]] || continue
                       install -Dm644 "$cand" \
-                          "${pkgdir}/usr/share/icons/hicolor/${size}/apps/mangaplus-reader.png"
+                          "${pkgdir}/usr/share/icons/hicolor/${size}/apps/mangaplus-desktop.png"
                       break
                   done
               done
