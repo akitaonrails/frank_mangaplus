@@ -48,6 +48,16 @@ Three layouts cycle on the toggle:
 
 The choice persists across chapters and sessions.
 
+### Night-reading sepia filter
+
+Press `F` (or click the crescent-moon icon in the header) to warm the page whites toward sepia. Bright LCD whites get harsh in the dark — this softens them without flattening contrast:
+
+![Reader with the eye-protection sepia filter active](docs/screenshots/reader-eye-protection.png)
+
+Four levels cycle on the toggle: **off → low → med → high → off**. The button tints amber and shows one to three dots to indicate the active level. Persisted in localStorage like the other reader prefs.
+
+Implemented as a CSS `sepia + brightness + saturate` filter on the whole page-stack — sepia shifts the hue toward amber while preserving the luminance range, so blacks stay black and the artwork's contrast is intact.
+
 ---
 
 ## Why this exists
