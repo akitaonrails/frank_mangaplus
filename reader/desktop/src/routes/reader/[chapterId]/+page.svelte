@@ -170,10 +170,10 @@
   // When the user is within PREFETCH_TRIGGER_DISTANCE pages of the end
   // of the last-loaded chapter, pre-fetch the next one and append.
   // Resulting pages flow continuously.
-  async function maybePrefetchNext() {
+  async function maybePrefetchNext(force = false) {
     if (fetchingNext || loadedPages.length === 0) return;
     const distanceToEnd = loadedPages.length - currentPage;
-    if (distanceToEnd > PREFETCH_TRIGGER_DISTANCE) return;
+    if (!force && distanceToEnd > PREFETCH_TRIGGER_DISTANCE) return;
 
     const lastLoadedChapter = loadedPages[loadedPages.length - 1].chapterId;
     const nextId = nextChapterIdAfter(lastLoadedChapter);
@@ -181,17 +181,25 @@
 
     fetchingNext = true;
     try {
-      const v = await invoke<MangaViewer>('get_chapter_pages', {
-        chapterId: nextId,
-        imgQuality: 'super_high',
-        viewerMode: 'vertical',
-        clang,
-        countryCode: country,
-      });
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('prefetch timed out')), 12_000),
+      );
+      const v = await Promise.race([
+        invoke<MangaViewer>('get_chapter_pages', {
+          chapterId: nextId,
+          imgQuality: 'super_high',
+          viewerMode: 'vertical',
+          clang,
+          countryCode: country,
+        }),
+        timeout,
+      ]);
       appendChapter(v);
     } catch (e) {
       console.warn('[reader] prefetch next chapter failed:', e);
     } finally {
+      // Always release the flag so the manual button (or another
+      // currentPage move) can retry, even if the call timed out.
       fetchingNext = false;
     }
   }
@@ -443,9 +451,22 @@
             bind:this={frameEls[gi]}
           >
             {#each group.pages as lp, pi (lp.mp.imageUrl)}
+              <!--
+                width + height attrs let the browser reserve the correct
+                aspect-ratio'd space BEFORE the image bytes arrive — no
+                Cumulative Layout Shift. Without these, each image's
+                arrival reflows the page-stack and bumps the user's
+                scroll position downward (very visible in double mode
+                because two images load in parallel with possibly
+                different aspect ratios). max-width / max-height in CSS
+                still cap the rendered size; these attrs only fix the
+                pre-load reservation.
+              -->
               <img
                 src={proxied(lp.mp.imageUrl)}
                 alt="Page {group.firstPageIndex + pi + 1}"
+                width={lp.mp.width}
+                height={lp.mp.height}
                 loading={group.firstPageIndex + pi < 3 ? 'eager' : 'lazy'}
                 decoding="async"
                 class="manga-page"
@@ -470,6 +491,15 @@
           <div class="loading-next"><div class="spinner"></div><span>loading next chapter…</span></div>
         {:else if loadedPages.length > 0 && nextChapterIdAfter(loadedPages[loadedPages.length - 1].chapterId) == null}
           <div class="end-of-title">— end of available chapters —</div>
+        {:else if loadedPages.length > 0}
+          <!-- A next chapter exists but isn't loaded yet. Auto-prefetch
+               normally handles this once currentPage moves to within
+               PREFETCH_TRIGGER_DISTANCE of the end, but a hung or
+               cancelled prefetch can leave the user stuck — give them
+               a manual hatch. -->
+          <button class="load-next-btn" onclick={() => void maybePrefetchNext(true)}>
+            Load next chapter ▶
+          </button>
         {/if}
       </div>
     {/if}
@@ -587,6 +617,11 @@
     /* Snap each .page-frame to the top of the viewport. mandatory means
        the browser always settles on a page boundary, never between. */
     scroll-snap-type: y mandatory;
+    /* Browsers default to overflow-anchor: auto, which keeps the
+       viewport pinned to whatever's visible when content above shifts.
+       Explicit here as a belt-and-suspenders against layout shift while
+       images further down the stack are still streaming in. */
+    overflow-anchor: auto;
   }
 
   .page-stack {
@@ -681,6 +716,22 @@
     flex-direction: column;
     align-items: center;
     gap: 10px;
+  }
+
+  .load-next-btn {
+    margin: 36px auto;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 10px 22px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .load-next-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
   }
 
   .reader-footer {
