@@ -11,7 +11,11 @@
     nextPageMode,
     getLastReadPage,
     setLastReadPage,
+    getEyeFilter,
+    setEyeFilter,
+    nextEyeFilter,
     type PageMode,
+    type EyeFilter,
   } from '$lib/readState';
   import { proxied } from '$lib/img';
   import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
@@ -54,6 +58,10 @@
   // monitors benefit from double. Persisted via localStorage so the
   // choice survives reloads.
   let pageMode: PageMode = $state('single');
+
+  // Eye-protection sepia filter; cycles off → low → med → high. Also
+  // persisted, also survives reloads.
+  let eyeFilter: EyeFilter = $state('off');
 
   // Pages bundled into render frames. In single mode every page is its
   // own group; in double mode adjacent pages from the *same chapter*
@@ -120,6 +128,7 @@
 
   onMount(() => {
     pageMode = getPageMode();
+    eyeFilter = getEyeFilter();
     void loadInitial();
     window.addEventListener('keydown', onKey);
     return () => {
@@ -384,6 +393,11 @@
     }
   }
 
+  function toggleEyeFilter() {
+    eyeFilter = nextEyeFilter(eyeFilter);
+    setEyeFilter(eyeFilter);
+  }
+
   function togglePageMode() {
     pageMode = nextPageMode(pageMode);
     setPageMode(pageMode);
@@ -474,6 +488,9 @@
     else if (e.key === 'd' || e.key === 'D') {
       e.preventDefault();
       togglePageMode();
+    } else if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      toggleEyeFilter();
     } else if (e.key === 'Escape') {
       goBack();
     }
@@ -540,6 +557,33 @@
       {/if}
     </button>
 
+    <!-- Eye-protection sepia filter: crescent moon icon, button tints
+         to the active accent at higher filter levels so the current
+         setting reads at a glance. -->
+    <button
+      class="filter-toggle"
+      class:on={eyeFilter !== 'off'}
+      data-level={eyeFilter}
+      onclick={toggleEyeFilter}
+      title="Cycle eye-protection filter (press F) — current: {eyeFilter}"
+      aria-label="Cycle eye-protection filter, current: {eyeFilter}"
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path
+          d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
+          fill={eyeFilter === 'off' ? 'none' : 'currentColor'}
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linejoin="round"
+        />
+      </svg>
+      {#if eyeFilter !== 'off'}
+        <span class="filter-level-dot" aria-hidden="true">
+          {eyeFilter === 'low' ? '·' : eyeFilter === 'med' ? '··' : '···'}
+        </span>
+      {/if}
+    </button>
+
     <span class="page-indicator">
       {#if loadedPages.length > 0}
         {#if currentGroupSize === 2}
@@ -559,7 +603,13 @@
     {:else if loadedPages.length === 0}
       <div class="empty-state"><p>No pages found for this chapter.</p></div>
     {:else}
-<div class="page-stack" bind:this={pageStackEl}>
+<div
+        class="page-stack"
+        class:eye-low={eyeFilter === 'low'}
+        class:eye-med={eyeFilter === 'med'}
+        class:eye-high={eyeFilter === 'high'}
+        bind:this={pageStackEl}
+      >
         {#each pageGroups as group, gi (gi)}
           {@const prevPageInPriorGroup =
             group.firstPageIndex > 0
@@ -738,6 +788,36 @@
     background: rgba(255, 255, 255, 0.06);
   }
 
+  .filter-toggle {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 4px 6px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
+  }
+
+  .filter-toggle:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .filter-toggle.on {
+    /* Warm amber tint so the active state reads at a glance. */
+    color: #f6c177;
+  }
+
+  .filter-level-dot {
+    font-size: 0.85rem;
+    line-height: 1;
+    letter-spacing: -0.05em;
+    margin-bottom: 2px;
+  }
+
   .page-indicator {
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
@@ -763,6 +843,15 @@
     flex-direction: column;
     align-items: center;
   }
+
+  /* Eye-protection sepia filter levels. CSS `filter: sepia()` shifts the
+     hue toward amber while preserving the luminance range (contrast stays
+     intact). brightness/saturate dial in the night-reading warmth. The
+     filter goes on the whole page-stack so background art, gutters, and
+     speech-bubble whites all warm together. */
+  .page-stack.eye-low  { filter: sepia(0.25) brightness(0.97); }
+  .page-stack.eye-med  { filter: sepia(0.50) brightness(0.90) saturate(0.85); }
+  .page-stack.eye-high { filter: sepia(0.75) brightness(0.82) saturate(0.70); }
 
   .page-frame {
     /* Size to the contained image — no fixed viewport-height frame.

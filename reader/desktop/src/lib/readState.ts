@@ -107,3 +107,28 @@ export function setPageMode(mode: PageMode) {
 export function nextPageMode(mode: PageMode): PageMode {
   return mode === 'single' ? 'double' : mode === 'double' ? 'double-cover' : 'single';
 }
+
+// Reading-comfort filter applied to all manga pages. Warms the whites
+// toward sepia so a bright-white background isn't harsh on the eyes
+// at night, without flattening contrast (sepia preserves luminance
+// range, just shifts hue).
+//   - off:  no filter
+//   - low:  subtle warm
+//   - med:  noticeable amber
+//   - high: heavy sepia, late-night
+export type EyeFilter = 'off' | 'low' | 'med' | 'high';
+const KEY_EYE_FILTER = 'mp:eyeFilter';
+const EYE_FILTER_VALUES: EyeFilter[] = ['off', 'low', 'med', 'high'];
+export function getEyeFilter(): EyeFilter {
+  const v = localStorage.getItem(KEY_EYE_FILTER);
+  return (EYE_FILTER_VALUES as string[]).includes(v ?? '') ? (v as EyeFilter) : 'off';
+}
+export function setEyeFilter(level: EyeFilter) {
+  localStorage.setItem(KEY_EYE_FILTER, level);
+}
+// Cycle order driven by the F key / toggle button: off → low → med →
+// high → off.
+export function nextEyeFilter(level: EyeFilter): EyeFilter {
+  const i = EYE_FILTER_VALUES.indexOf(level);
+  return EYE_FILTER_VALUES[(i + 1) % EYE_FILTER_VALUES.length];
+}

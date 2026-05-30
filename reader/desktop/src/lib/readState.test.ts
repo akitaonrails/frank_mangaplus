@@ -11,6 +11,9 @@ import {
   nextPageMode,
   getLastReadPage,
   setLastReadPage,
+  getEyeFilter,
+  setEyeFilter,
+  nextEyeFilter,
 } from './readState';
 
 // Minimal in-memory localStorage shim — vitest's jsdom-less default doesn't
@@ -121,5 +124,29 @@ describe('readState', () => {
   it('per-chapter last-read page returns null for garbage in storage', () => {
     localStorage.setItem('mp:chpage:99', 'not-a-number');
     expect(getLastReadPage(99)).toBe(null);
+  });
+
+  it('eye filter defaults to off and round-trips all four levels', () => {
+    expect(getEyeFilter()).toBe('off');
+    setEyeFilter('low');
+    expect(getEyeFilter()).toBe('low');
+    setEyeFilter('med');
+    expect(getEyeFilter()).toBe('med');
+    setEyeFilter('high');
+    expect(getEyeFilter()).toBe('high');
+    setEyeFilter('off');
+    expect(getEyeFilter()).toBe('off');
+  });
+
+  it('eye filter treats unknown values as off', () => {
+    localStorage.setItem('mp:eyeFilter', 'extreme');
+    expect(getEyeFilter()).toBe('off');
+  });
+
+  it('nextEyeFilter cycles off → low → med → high → off', () => {
+    expect(nextEyeFilter('off')).toBe('low');
+    expect(nextEyeFilter('low')).toBe('med');
+    expect(nextEyeFilter('med')).toBe('high');
+    expect(nextEyeFilter('high')).toBe('off');
   });
 });
