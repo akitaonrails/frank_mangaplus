@@ -33,7 +33,20 @@
 | Library / Search | Title detail | Reader |
 |:---:|:---:|:---:|
 | ![Library and full catalog search](docs/screenshots/library.png) | ![Title detail with chapter list](docs/screenshots/title-detail.png) | ![Page-fit reader with snap scroll](docs/screenshots/reader.png) |
-| Your bookmarked titles, plus the full catalog if you want to browse. | Banner art, synopsis, the chapter list (virtualized — One Piece has 1100+ and it still scrolls fine). | One page at a time, snap scrolling. Click the bottom half of the page to advance. |
+| Your bookmarked titles, plus the full catalog if you want to browse. | Banner art, synopsis, the chapter list (virtualized — One Piece has 1100+ and it still scrolls fine). | Single-page mode: one page snapped to the viewport. Left half of the page advances (manga RTL), right half goes back. |
+
+### Double-page mode
+
+Press `D` (or click the layout icon in the header) and the reader pairs facing pages so a two-page spread fills the screen the way it was drawn:
+
+![Double-page spread on a widescreen monitor](docs/screenshots/reader-double-page.png)
+
+Three layouts cycle on the toggle:
+- **single** — one page at a time
+- **double** — sequential pairs from page 1
+- **double-cover** — first page of each chapter solo, then pairs (matches printed manga where the cover binds singly before the first spread)
+
+The choice persists across chapters and sessions.
 
 ---
 
@@ -76,7 +89,7 @@ A library view of your bookmarked titles. The search page hits the full English 
 
 Title detail shows the banner art, the synopsis, and the full chapter list. The list is virtualized, so a series with a thousand chapters scrolls fine. There's a sort toggle, and a "Continue ▶" button that jumps to the last chapter you opened.
 
-The reader is page-fit and snap-scrolls. Click the bottom of a page to go forward, the top to go back. Keyboard works too (Space, arrows, PgUp/Dn). When you reach the end of a chapter the next one pre-fetches and appends to the scroll, so you don't have to bounce back to the chapter list every time.
+The reader is page-fit and snap-scrolls. Click the left half of a page to advance, the right half to go back (manga RTL reading direction). Arrow keys, Space, j/k, PageUp/Down all work too. When you reach the end of a chapter the next one pre-fetches and appends to the scroll, so you don't have to bounce back to the chapter list every time. Per-chapter resume is automatic — leave mid-read and the next time you open that chapter you land on the page you stopped at.
 
 Every page you load gets cached to `~/.cache/mangaplus-reader/`. Re-opening the same chapter is instant after the first read.
 
