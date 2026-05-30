@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import type { MangaViewer, MangaPage, Chapter, TitleDetailView } from '$lib/types';
@@ -417,7 +417,13 @@
       if (lastChId == null) return;
       if (nextChapterIdAfter(lastChId) == null) return; // truly end of title
       await maybePrefetchNext(true);
-      // After append, advance into the just-loaded next chapter.
+      // Wait for Svelte to flush the new pageGroups → frameEls bindings.
+      // Without this tick(), goToGroupIndex hits frameEls[N+1] before
+      // bind:this has fired on the new frame, frameEls[N+1] is undefined,
+      // and the call silently no-ops. That was the "space bar doesn't
+      // cross the chapter boundary" bug — mouse scrolling worked because
+      // it doesn't depend on frameEls.
+      await tick();
       if (currentGroup + 1 < pageGroups.length) {
         if (animation === 'flip') void pageFlip('forward');
         else goToGroupIndex(currentGroup + 1);
@@ -591,18 +597,18 @@
                 class="manga-page"
               />
             {/each}
-            <!-- RTL click zones: left = next, right = prev (manga reading direction) -->
+            <!-- RTL click zones: left half advances, right half goes back -->
             <button
               class="click-zone zone-next"
               type="button"
               aria-label="Next page"
-              onclick={() => onZoneClick('next')}
+              onclick={(e) => { e.stopPropagation(); onZoneClick('next'); }}
             ></button>
             <button
               class="click-zone zone-prev"
               type="button"
               aria-label="Previous page"
-              onclick={() => onZoneClick('prev')}
+              onclick={(e) => { e.stopPropagation(); onZoneClick('prev'); }}
             ></button>
           </div>
         {/each}
@@ -808,14 +814,21 @@
     position: absolute;
     top: 0;
     bottom: 0;
+    width: 50%;
     background: transparent;
     border: none;
     cursor: pointer;
-    /* No visual; just a hit-target. */
+    /* Hit-target only — needs to sit above the manga-page (which has
+       pointer-events: none) and above any flex-arranged siblings in
+       double-pair mode. Both zones use left-based positioning so the
+       flex container can't accidentally re-interpret `right` during
+       layout. */
+    z-index: 2;
+    pointer-events: auto;
   }
   /* Manga RTL: left half advances, right half goes back. */
-  .zone-next { left: 0;  width: 50%; }
-  .zone-prev { right: 0; width: 50%; }
+  .zone-next { left: 0; }
+  .zone-prev { left: 50%; }
   .click-zone:focus-visible {
     outline: 2px dashed var(--accent);
     outline-offset: -4px;
