@@ -4,7 +4,12 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import type { MangaViewer, MangaPage, Chapter } from '$lib/types';
-  import { markChapterRead } from '$lib/readState';
+  import {
+    markChapterRead,
+    getPageMode,
+    setPageMode,
+    type PageMode,
+  } from '$lib/readState';
   import { proxied } from '$lib/img';
   import { DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
 
@@ -41,20 +46,61 @@
   // Auto-advance state
   let fetchingNext = $state(false);
 
-  // Currently-on-screen page (1-indexed, across all loaded chapters)
-  let currentPage = $state(1);
+  // Layout: single page per frame or two pages side-by-side. Wide
+  // monitors benefit from double. Persisted via localStorage so the
+  // choice survives reloads.
+  let pageMode: PageMode = $state('single');
+
+  // Pages bundled into render frames. In single mode every page is its
+  // own group; in double mode adjacent pages from the *same chapter*
+  // pair up. Never pair across chapter boundaries — would mix two
+  // chapters into a single rendered frame.
+  type PageGroup = {
+    pages: LoadedPage[];
+    /** Index in loadedPages of the first page in this group. */
+    firstPageIndex: number;
+  };
+  let pageGroups: PageGroup[] = $derived.by(() => {
+    if (pageMode === 'single') {
+      return loadedPages.map((p, i) => ({ pages: [p], firstPageIndex: i }));
+    }
+    const groups: PageGroup[] = [];
+    let i = 0;
+    while (i < loadedPages.length) {
+      const a = loadedPages[i];
+      const b = loadedPages[i + 1];
+      if (b && b.chapterId === a.chapterId) {
+        groups.push({ pages: [a, b], firstPageIndex: i });
+        i += 2;
+      } else {
+        groups.push({ pages: [a], firstPageIndex: i });
+        i += 1;
+      }
+    }
+    return groups;
+  });
+
+  // Currently-visible group (0-indexed into pageGroups).
+  let currentGroup = $state(0);
   let frameEls: HTMLElement[] = $state([]);
   let scrollRoot: HTMLElement | undefined = $state();
 
   let observer: IntersectionObserver | null = null;
 
-  // Currently-visible chapter (derived from currentPage)
-  let visibleChapterName = $derived(loadedPages[currentPage - 1]?.chapterName ?? '');
-  let visibleChapterId = $derived(loadedPages[currentPage - 1]?.chapterId ?? 0);
+  // Derived: the leftmost page index in the visible group (for the
+  // header indicator + read-state tracking).
+  let currentPageIndex = $derived(pageGroups[currentGroup]?.firstPageIndex ?? 0);
+  let currentPage = $derived(currentPageIndex + 1);
+  let currentGroupSize = $derived(pageGroups[currentGroup]?.pages.length ?? 1);
+
+  // Currently-visible chapter (derived from the current group's first page)
+  let visibleChapterName = $derived(loadedPages[currentPageIndex]?.chapterName ?? '');
+  let visibleChapterId = $derived(loadedPages[currentPageIndex]?.chapterId ?? 0);
 
   // ---------- load ----------
 
   onMount(() => {
+    pageMode = getPageMode();
     void loadInitial();
     window.addEventListener('keydown', onKey);
     return () => {
@@ -103,12 +149,6 @@
     const i = allChapters.findIndex(c => c.chapterId === chId);
     if (i < 0 || i === allChapters.length - 1) return null;
     return allChapters[i + 1].chapterId;
-  }
-
-  function prevChapterIdBefore(chId: number): number | null {
-    const i = allChapters.findIndex(c => c.chapterId === chId);
-    if (i <= 0) return null;
-    return allChapters[i - 1].chapterId;
   }
 
   // When the user is within PREFETCH_TRIGGER_DISTANCE pages of the end
@@ -160,8 +200,8 @@
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
-            const idx = Number((entry.target as HTMLElement).dataset.pageIndex);
-            if (!isNaN(idx)) currentPage = idx + 1;
+            const idx = Number((entry.target as HTMLElement).dataset.groupIndex);
+            if (!isNaN(idx)) currentGroup = idx;
           }
         }
       },
@@ -170,22 +210,51 @@
     for (const el of frameEls) if (el) observer.observe(el);
   }
 
+  // Re-bind the observer whenever the frame set changes — that includes
+  // appending a new chapter AND toggling pageMode (which regroups).
   $effect(() => {
+    // Touch pageGroups so we re-run when grouping changes too.
+    void pageGroups.length;
     if (frameEls.length > 0 && !loading) setupObserver();
   });
 
-  function goToPageIndex(idx: number) {
-    if (idx < 0 || idx >= loadedPages.length) return;
+  function goToGroupIndex(idx: number) {
+    if (idx < 0 || idx >= pageGroups.length) return;
     frameEls[idx]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  function togglePageMode() {
+    pageMode = pageMode === 'single' ? 'double' : 'single';
+    setPageMode(pageMode);
+    // After regrouping, settle on the group that contains the page
+    // the user was just on, so the toggle doesn't jump them around.
+    const oldFirstPage = currentPageIndex;
+    queueMicrotask(() => {
+      const target = pageGroups.findIndex(g =>
+        g.pages.some((_, i) => g.firstPageIndex + i === oldFirstPage)
+      );
+      if (target >= 0) goToGroupIndex(target);
+    });
+  }
+
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'ArrowDown' || e.key === 'j' || e.key === ' ' || e.key === 'PageDown') {
+    // Forward (next page in manga RTL = visually-left direction).
+    // Includes ArrowLeft for the RTL convention plus the conventional
+    // scroll-down keys that everyone has muscle memory for.
+    if (
+      e.key === 'ArrowDown' || e.key === 'j' || e.key === ' ' ||
+      e.key === 'PageDown' || e.key === 'ArrowLeft'
+    ) {
       e.preventDefault();
-      goToPageIndex(currentPage); // currentPage is 1-indexed → next idx
-    } else if (e.key === 'ArrowUp' || e.key === 'k' || e.key === 'PageUp') {
+      goToGroupIndex(currentGroup + 1);
+    } else if (
+      e.key === 'ArrowUp' || e.key === 'k' || e.key === 'PageUp' || e.key === 'ArrowRight'
+    ) {
       e.preventDefault();
-      goToPageIndex(currentPage - 2);
+      goToGroupIndex(currentGroup - 1);
+    } else if (e.key === 'd' || e.key === 'D') {
+      e.preventDefault();
+      togglePageMode();
     } else if (e.key === 'Escape') {
       goBack();
     }
@@ -196,10 +265,12 @@
     else history.back();
   }
 
-  // Click on the page: top half → prev, bottom half → next.
+  // Click zones map to manga RTL: left half = forward (next), right
+  // half = back (previous). Matches the physical motion of flipping a
+  // bound manga page from right to left.
   function onZoneClick(direction: 'prev' | 'next') {
-    if (direction === 'next') goToPageIndex(currentPage);
-    else goToPageIndex(currentPage - 2);
+    if (direction === 'next') goToGroupIndex(currentGroup + 1);
+    else goToGroupIndex(currentGroup - 1);
   }
 </script>
 
@@ -216,9 +287,35 @@
       <span class="reader-title">{initialViewer.titleName}</span>
       <span class="reader-chapter">{visibleChapterName || initialViewer.chapterName}</span>
     {/if}
+
+    <!-- right-side controls -->
+    <button
+      class="mode-toggle"
+      onclick={togglePageMode}
+      title="Toggle single/double page (press D)"
+      aria-label={pageMode === 'single' ? 'Switch to double-page' : 'Switch to single-page'}
+    >
+      {#if pageMode === 'single'}
+        <!-- single page icon -->
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <rect x="6" y="3" width="12" height="18" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>
+        </svg>
+      {:else}
+        <!-- double page icon -->
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <rect x="2"  y="4" width="9" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+          <rect x="13" y="4" width="9" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+        </svg>
+      {/if}
+    </button>
+
     <span class="page-indicator">
       {#if loadedPages.length > 0}
-        {currentPage} / {loadedPages.length}{#if fetchingNext}…{/if}
+        {#if currentGroupSize === 2}
+          {currentPage}-{currentPage + 1} / {loadedPages.length}{#if fetchingNext}…{/if}
+        {:else}
+          {currentPage} / {loadedPages.length}{#if fetchingNext}…{/if}
+        {/if}
       {/if}
     </span>
   </header>
@@ -232,34 +329,42 @@
       <div class="empty-state"><p>No pages found for this chapter.</p></div>
     {:else}
       <div class="page-stack">
-        {#each loadedPages as lp, i (i)}
-          {@const prevChapterId = i > 0 ? loadedPages[i - 1].chapterId : 0}
-          {#if lp.chapterId !== prevChapterId && i > 0}
-            <div class="chapter-divider">▼ {lp.chapterName}</div>
+        {#each pageGroups as group, gi (gi)}
+          {@const prevPageInPriorGroup =
+            group.firstPageIndex > 0
+              ? loadedPages[group.firstPageIndex - 1].chapterId
+              : 0}
+          {@const groupChapterId = group.pages[0].chapterId}
+          {#if groupChapterId !== prevPageInPriorGroup && group.firstPageIndex > 0}
+            <div class="chapter-divider">▼ {group.pages[0].chapterName}</div>
           {/if}
           <div
             class="page-frame"
-            data-page-index={i}
-            bind:this={frameEls[i]}
+            class:is-pair={group.pages.length === 2}
+            data-group-index={gi}
+            bind:this={frameEls[gi]}
           >
-            <img
-              src={proxied(lp.mp.imageUrl)}
-              alt="Page {i + 1}"
-              loading={i < 3 ? 'eager' : 'lazy'}
-              decoding="async"
-              class="manga-page"
-            />
-            <button
-              class="click-zone zone-prev"
-              type="button"
-              aria-label="Previous page"
-              onclick={() => onZoneClick('prev')}
-            ></button>
+            {#each group.pages as lp, pi (lp.mp.imageUrl)}
+              <img
+                src={proxied(lp.mp.imageUrl)}
+                alt="Page {group.firstPageIndex + pi + 1}"
+                loading={group.firstPageIndex + pi < 3 ? 'eager' : 'lazy'}
+                decoding="async"
+                class="manga-page"
+              />
+            {/each}
+            <!-- RTL click zones: left = next, right = prev (manga reading direction) -->
             <button
               class="click-zone zone-next"
               type="button"
               aria-label="Next page"
               onclick={() => onZoneClick('next')}
+            ></button>
+            <button
+              class="click-zone zone-prev"
+              type="button"
+              aria-label="Previous page"
+              onclick={() => onZoneClick('prev')}
             ></button>
           </div>
         {/each}
@@ -274,6 +379,7 @@
 
   {#if !loading && loadedPages.length > 0}
     <footer class="reader-footer">
+      <!-- Bar fills from the right edge to reflect manga RTL reading direction. -->
       <div
         class="progress-bar"
         style:width={(currentPage / loadedPages.length) * 100 + '%'}
@@ -340,8 +446,25 @@
     min-width: 0;
   }
 
-  .page-indicator {
+  .mode-toggle {
     margin-left: auto;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 4px 6px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
+  }
+
+  .mode-toggle:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .page-indicator {
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
     flex-shrink: 0;
@@ -377,6 +500,18 @@
     scroll-snap-stop: always;
   }
 
+  /* Double-page pair: lay out side-by-side in manga RTL order so the
+     first page of the pair sits on the right and the second on the
+     left. The user reads right-page first, then jumps to left-page,
+     then scrolls/clicks to the next pair. */
+  .page-frame.is-pair {
+    display: flex;
+    flex-direction: row-reverse;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 2px;
+  }
+
   .manga-page {
     /* Cap a single page to the visible reader area (viewport minus
        header + footer + a little for the gap). Width is then
@@ -391,17 +526,23 @@
     pointer-events: none; /* clicks go through to the zones below */
   }
 
+  .page-frame.is-pair .manga-page {
+    /* Each image in a pair shares the available width. */
+    max-width: 50%;
+  }
+
   .click-zone {
     position: absolute;
-    left: 0;
-    right: 0;
+    top: 0;
+    bottom: 0;
     background: transparent;
     border: none;
     cursor: pointer;
     /* No visual; just a hit-target. */
   }
-  .zone-prev { top: 0; height: 35%; }
-  .zone-next { bottom: 0; height: 65%; }
+  /* Manga RTL: left half advances, right half goes back. */
+  .zone-next { left: 0;  width: 50%; }
+  .zone-prev { right: 0; width: 50%; }
   .click-zone:focus-visible {
     outline: 2px dashed var(--accent);
     outline-offset: -4px;
@@ -447,9 +588,12 @@
   }
 
   .progress-bar {
+    /* Manga RTL: fill grows from the right edge leftward, so the
+       "consumed" portion of the bar visually trails the reader's
+       direction of travel (right→left). */
     position: absolute;
     bottom: 100%;
-    left: 0;
+    right: 0;
     height: 2px;
     background: var(--accent);
     transition: width 0.2s;

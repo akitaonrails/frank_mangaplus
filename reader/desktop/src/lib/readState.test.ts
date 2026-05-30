@@ -6,6 +6,8 @@ import {
   getLastReadChapter,
   getSortDescending,
   setSortDescending,
+  getPageMode,
+  setPageMode,
 } from './readState';
 
 // Minimal in-memory localStorage shim — vitest's jsdom-less default doesn't
@@ -74,5 +76,18 @@ describe('readState', () => {
     expect(getSortDescending()).toBe(false);
     setSortDescending(true);
     expect(getSortDescending()).toBe(true);
+  });
+
+  it('page mode defaults to single and round-trips', () => {
+    expect(getPageMode()).toBe('single');
+    setPageMode('double');
+    expect(getPageMode()).toBe('double');
+    setPageMode('single');
+    expect(getPageMode()).toBe('single');
+  });
+
+  it('page mode treats unknown values as single', () => {
+    localStorage.setItem('mp:pageMode', 'triple');
+    expect(getPageMode()).toBe('single');
   });
 });

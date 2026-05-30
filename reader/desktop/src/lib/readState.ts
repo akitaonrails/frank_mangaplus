@@ -61,3 +61,14 @@ export function getSortDescending(): boolean {
 export function setSortDescending(v: boolean) {
   localStorage.setItem(KEY_SORT_DESC, v ? '1' : '0');
 }
+
+// Reader page layout: one page per frame ("single") or two pages side-by-
+// side ("double"). Default: single.
+export type PageMode = 'single' | 'double';
+const KEY_PAGE_MODE = 'mp:pageMode';
+export function getPageMode(): PageMode {
+  return localStorage.getItem(KEY_PAGE_MODE) === 'double' ? 'double' : 'single';
+}
+export function setPageMode(mode: PageMode) {
+  localStorage.setItem(KEY_PAGE_MODE, mode);
+}
