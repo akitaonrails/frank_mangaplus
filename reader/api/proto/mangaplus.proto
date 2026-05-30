@@ -20,6 +20,9 @@ message Response {
 // are the ground truth.
 message SuccessResult {
   oneof data {
+    // REGISTERATION_DATA_FIELD_NUMBER = 2. Returned by PUT /api/register —
+    // the Java field name preserves the source-side typo ("registeration").
+    RegistrationData     registeration_data     = 2;
     // SUBSCRIBED_TITLES_VIEW_FIELD_NUMBER = 7. This is what
     // /title_list/bookmark actually returns (the endpoint name and the
     // Java method `getFavoriteTitles()` were misleading — wire format
@@ -37,6 +40,12 @@ message SuccessResult {
     // /title_list/bookmark does NOT use this despite the name pun.
     FavoriteTitlesView   favorite_titles_view   = 43;
   }
+}
+
+// Source: RegistrationDataOuterClass.java.
+// DEVICE_SECRET_FIELD_NUMBER = 1.
+message RegistrationData {
+  string device_secret = 1;
 }
 
 // Source: ErrorResultOuterClass.java line 602.

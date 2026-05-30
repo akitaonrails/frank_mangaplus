@@ -1,4 +1,4 @@
-use mangaplus_api::{proto, Client, ClientConfig};
+use mangaplus_api::{proto, register_new_device, Client, ClientConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::http::Response;
@@ -87,7 +87,7 @@ fn secret_file() -> PathBuf {
 
 /// Look for a configured secret. Env var wins; falls back to the on-disk
 /// config file. Returns an empty string if neither has a usable value —
-/// the app launches anyway, the frontend shows a setup dialog.
+/// the caller may then auto-register a fresh free-tier device.
 fn read_secret() -> String {
     if let Ok(s) = std::env::var("MANGAPLUS_SECRET") {
         let s = s.trim().to_string();
@@ -99,6 +99,46 @@ fn read_secret() -> String {
         return s.trim().to_string();
     }
     String::new()
+}
+
+/// Register a brand-new device against the official endpoint and persist
+/// the returned `deviceSecret` to the config file so subsequent launches
+/// reuse it. The endpoint requires only an MD5(android_id) and the
+/// salted MD5 of that — see `register_new_device` in mangaplus-api for
+/// the wire details. Returns the new secret, or empty string on failure
+/// (in which case the frontend's setup dialog takes over).
+///
+/// A self-registered secret has free-tier access only. If the user has
+/// a paid subscription, they can paste their phone-extracted secret via
+/// `set_secret` and it overwrites this one.
+fn auto_register_secret() -> String {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("[mangaplus-reader] auto-register: runtime build failed: {e}");
+            return String::new();
+        }
+    };
+    match rt.block_on(register_new_device()) {
+        Ok(secret) => {
+            let path = secret_file();
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&path, &secret) {
+                eprintln!("[mangaplus-reader] auto-register: persisting secret failed: {e}");
+            }
+            eprintln!("[mangaplus-reader] auto-register: registered new free-tier device");
+            secret
+        }
+        Err(e) => {
+            eprintln!("[mangaplus-reader] auto-register failed: {e}");
+            String::new()
+        }
+    }
 }
 
 /// XDG cache dir for the app's image cache. Falls back to ~/.cache then
@@ -207,13 +247,17 @@ async fn get_chapter_pages(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let secret = read_secret();
+    let mut secret = read_secret();
     eprintln!(
         "[mangaplus-reader] image cache: {}",
         image_cache_dir().display()
     );
     if secret.is_empty() {
-        eprintln!("[mangaplus-reader] no deviceSecret configured — app will show setup dialog");
+        eprintln!("[mangaplus-reader] no deviceSecret configured — attempting fresh registration");
+        secret = auto_register_secret();
+        if secret.is_empty() {
+            eprintln!("[mangaplus-reader] auto-register did not produce a secret — setup dialog will show");
+        }
     }
     let client = rebuild_client(&secret).expect("build api client");
     let state = AppState {

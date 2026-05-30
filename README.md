@@ -41,16 +41,17 @@
 
 I pay for MANGA Plus and I wanted to read it on a desktop. Shueisha doesn't ship a desktop client. So you have two choices: sideload the Android app onto a tablet (works, but a tablet is a tablet), or squint at your phone. This is option three.
 
-Under the hood it's the same API the official Android app uses, with the same session token your existing install already has. It does not bypass the subscription — you're still paying Shueisha for the actual content. All it does is move the rendering surface to a screen that has a keyboard attached.
+Under the hood it's the same API the official Android app uses. By default the app registers itself as a fresh device on first launch — same flow the official app uses when you install it — so you get free-tier access to the catalog out of the box. If you're already a paid subscriber and want subscription chapters on desktop, you can paste your phone's `deviceSecret` into the app to swap in your subscriber session. Nothing about the paywall is bypassed.
 
 ## What you need
 
-An active MANGA Plus subscription. The API has no free tier; without a valid `deviceSecret` every endpoint returns "Invalid Parameter".
+Just a downloaded binary. Launch it, and the app registers itself with the official API on first run. That gives you free-tier access to everything MANGA Plus shows for free — the entire catalog, latest and first chapters of every series, the free-rotation backlog.
 
-Then 5 to 10 minutes the first time, to get that secret out of an install you already have. Two paths:
+If you also want subscription-locked chapters on desktop:
 
-- If your phone is rooted, one `adb shell` away.
-- If it isn't, you set up a rooted Android emulator (Magisk + Play Store). Takes about 20 minutes the first time, never again after that. Walkthrough is in [docs/android-secret.md](docs/android-secret.md).
+- An active MANGA Plus subscription on a phone install.
+- Your `deviceSecret` from that install. 5 minutes if your phone is rooted (`adb shell`), about 20 if it isn't (rooted Android emulator on your desktop — walkthrough in [docs/android-secret.md](docs/android-secret.md)).
+- Paste it into the app's settings. Replaces the free-tier session with your subscriber one.
 
 ## Install
 
@@ -67,7 +68,7 @@ Grab the build for your OS from the [Releases page](https://github.com/akitaonra
 
 Long-form install doc: [docs/install.md](docs/install.md).
 
-On first launch the app shows a setup dialog asking for your `deviceSecret`. Paste it, save, done.
+On first launch the app calls the official `/register` endpoint and is issued a fresh free-tier `deviceSecret`. That gets saved locally and you're reading the catalog. If you're a paid subscriber and want subscription chapters too, open Settings and paste your phone-extracted `deviceSecret` to upgrade.
 
 ## What's in it
 
@@ -109,13 +110,13 @@ If you don't trust a random binary on the internet to do that honestly (you shou
 
 ## Documentation
 
-- [`docs/install.md`](docs/install.md): end-user install. Download, get a `deviceSecret`, set the env var or paste it in.
-- [`docs/android-secret.md`](docs/android-secret.md): the rooted-AVD walkthrough. Doesn't touch your phone.
+- [`docs/install.md`](docs/install.md): end-user install. Free-tier auto-register and the optional subscriber upgrade.
+- [`docs/android-secret.md`](docs/android-secret.md): the rooted-AVD walkthrough for extracting a subscriber `deviceSecret`. Doesn't touch your phone.
 - [`docs/debugging.md`](docs/debugging.md): contributor notes. mitmproxy, Frida, the real headers, what tripped me up.
 
 ## Disclaimer
 
-Not affiliated with Shueisha or Manga Plus. It uses a session token extracted from an install you own to talk to the official API. It does not bypass any subscription, paywall, or DRM. **You have to already pay for a MANGA Plus subscription for this to do anything useful.**
+Not affiliated with Shueisha or Manga Plus. The default fresh-register flow reproduces the same handshake the official Android app performs on a new install — it grants free-tier access only. Subscription-locked content requires pasting in a `deviceSecret` extracted from your own paid phone install. No paywall, subscription, or DRM is bypassed.
 
 ## License
 

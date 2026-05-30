@@ -28,4 +28,7 @@ pub enum ApiError {
         actual: &'static str,
         expected: &'static str,
     },
+
+    #[error("{0}")]
+    Other(String),
 }

@@ -14,6 +14,13 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 wreq = { workspace = true }
 wreq-util = { workspace = true }
+# Fresh-device registration handshake: device_token = MD5(android_id),
+# security_key = MD5(device_token + "4Kin9vGg"). android_id is generated
+# from 8 random bytes when we self-enroll instead of extracting it from
+# a phone install.
+md-5 = "0.10"
+hex = "0.4"
+getrandom = "0.2"
 
 [build-dependencies]
 prost-build = { workspace = true }

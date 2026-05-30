@@ -397,6 +397,7 @@ fn server_error(e: proto::ErrorResult) -> ApiError {
 fn variant_name(d: &proto::success_result::Data) -> &'static str {
     use proto::success_result::Data::*;
     match d {
+        RegisterationData(_)    => "registeration_data",
         SubscribedTitlesView(_) => "subscribed_titles_view",
         TitleDetailView(_)      => "title_detail_view",
         MangaViewer(_)          => "manga_viewer",
@@ -404,4 +405,68 @@ fn variant_name(d: &proto::success_result::Data) -> &'static str {
         SearchView(_)           => "search_view",
         FavoriteTitlesView(_)   => "favorite_titles_view",
     }
+}
+
+// ---------- fresh device registration ----------
+
+/// Salt baked into the official Android app. Combined with MD5(android_id)
+/// to derive the security_key the registration endpoint expects. Present
+/// in InitialRegistrationViewModel.java:69 of v2.3.0 as a plain string
+/// literal — there is no obfuscation, native lib, or runtime decryption.
+const REGISTER_SALT: &str = "4Kin9vGg";
+
+/// Register a fresh device with no prior credentials. Returns the
+/// `deviceSecret` the server hands back, which is then a valid auth
+/// token for every other endpoint. The session has free-tier access
+/// only — subscription-locked chapters require a `subscription_restore`
+/// or `subscription_receipt` call with a real Google Play purchase
+/// signature, which the desktop can't produce.
+///
+/// On the wire:
+///   PUT https://jumpg-api.tokyo-cdn.com/api/register
+///     ?os=android&os_ver=…&app_ver=…
+///     &device_token=<MD5(android_id)>
+///     &security_key=<MD5(device_token + "4Kin9vGg")>
+///
+/// `android_id` is normally `Settings.Secure.ANDROID_ID`, a 64-bit hex
+/// value. We generate 8 random bytes and hex-encode them — the server
+/// treats it as an opaque key, no validation against device attestation.
+pub async fn register_new_device() -> Result<String> {
+    let mut bytes = [0u8; 8];
+    getrandom::getrandom(&mut bytes).map_err(|e| ApiError::Other(format!("getrandom: {e}")))?;
+    let android_id = hex::encode(bytes);
+    let device_token = md5_hex(android_id.as_bytes());
+    let security_key = md5_hex(format!("{device_token}{REGISTER_SALT}").as_bytes());
+
+    let http = reqwest::Client::builder()
+        .user_agent("okhttp/4.12.0")
+        .build()?;
+    let url = format!("https://{API_HOST}/api/register");
+    let resp = http
+        .put(&url)
+        .query(&[
+            ("os", "android"),
+            ("os_ver", OS_VER_DEFAULT),
+            ("app_ver", APP_VER),
+            ("device_token", device_token.as_str()),
+            ("security_key", security_key.as_str()),
+        ])
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(ApiError::Status(status.as_u16()));
+    }
+    let body = resp.bytes().await?.to_vec();
+    extract_variant(body, "registeration_data", |d| match d {
+        proto::success_result::Data::RegisterationData(r) => Ok(r.device_secret),
+        _ => Err(()),
+    })
+}
+
+fn md5_hex(input: &[u8]) -> String {
+    use md5::{Digest, Md5};
+    let mut h = Md5::new();
+    h.update(input);
+    hex::encode(h.finalize())
 }
