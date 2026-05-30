@@ -37,6 +37,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: reader -> target
+          key: ${{ matrix.platform }}
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -54,6 +55,16 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            ~/AppData/Local/bun/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('reader/desktop/bun.lockb', 'reader/desktop/package.json') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
 
       - name: Install frontend dependencies
         working-directory: reader/desktop
