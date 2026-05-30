@@ -3,7 +3,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import type { MangaViewer, MangaPage, Chapter } from '$lib/types';
+  import type { MangaViewer, MangaPage, Chapter, TitleDetailView } from '$lib/types';
   import {
     markChapterRead,
     getPageMode,
@@ -14,7 +14,7 @@
     type PageMode,
   } from '$lib/readState';
   import { proxied } from '$lib/img';
-  import { DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
+  import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
 
   // Start fetching the next chapter when the user is this close (in
   // currently-loaded pages) to the end of the loaded scroll. Tuned to
@@ -24,6 +24,7 @@
 
   // The reader inherits locale from the title page via URL params.
   // Defaults apply when navigating to a chapter URL directly.
+  let lang = $derived($page.url.searchParams.get('lang') ?? DEFAULT_LANG);
   let clang = $derived($page.url.searchParams.get('clang') ?? DEFAULT_CLANG);
   let country = $derived($page.url.searchParams.get('country') ?? DEFAULT_COUNTRY);
 
@@ -140,10 +141,45 @@
         countryCode: country,
       });
       initialViewer = v;
-      // Ascending chapter order (the API sometimes returns mixed).
+      // The manga_viewer_v3 response's `chapters` field is NOT the full
+      // chapter list — for most titles past chapter 3-ish it's truncated
+      // to the first few chapters. Kaiju No. 8 chapter 54 returns only
+      // chapters 1-3 in its viewer.chapters, which made nextChapterIdAfter
+      // think the user was past the end of the title and trigger the
+      // end-of-title indicator incorrectly.
+      // Use viewer.chapters as a temporary list so navigation works in
+      // the first second, then replace with the canonical list from
+      // title_detail once that arrives.
       allChapters = [...(v.chapters ?? [])].sort((a, b) => a.chapterId - b.chapterId);
       appendChapter(v);
       if (v.titleId && v.chapterId) markChapterRead(v.titleId, v.chapterId);
+
+      // Kick off title_detail in the background to get the authoritative
+      // chapter list. Doesn't block the user seeing the first pages.
+      if (v.titleId) {
+        void invoke<TitleDetailView>('get_title_detail', {
+          titleId: v.titleId,
+          lang,
+          clang,
+          countryCode: country,
+        })
+          .then(detail => {
+            const canonical: Chapter[] =
+              detail.chapterListV2 && detail.chapterListV2.length > 0
+                ? detail.chapterListV2
+                : detail.chapterListGroup
+                  ? [
+                      ...detail.chapterListGroup.firstChapterList,
+                      ...detail.chapterListGroup.midChapterList,
+                      ...detail.chapterListGroup.lastChapterList,
+                    ]
+                  : [];
+            if (canonical.length > allChapters.length) {
+              allChapters = [...canonical].sort((a, b) => a.chapterId - b.chapterId);
+            }
+          })
+          .catch(e => console.warn('[reader] title_detail fetch failed (using viewer.chapters):', e));
+      }
 
       // Resume reading: if we left this chapter mid-read last time,
       // scroll to that page. Wait for frames to bind first, then find
