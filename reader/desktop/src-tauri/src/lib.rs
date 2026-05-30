@@ -295,6 +295,22 @@ async fn get_chapter_pages(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK's DMABUF/EGL renderer crashes at startup on a lot of
+    // Wayland setups with "Could not create GBM EGL display:
+    // EGL_SUCCESS. Aborting...". Falling back to the SHM path via this
+    // env var works reliably across Mesa, AMD, NVIDIA, and X11/Wayland.
+    // Must run before any GTK/WebKit code touches anything — this
+    // function is the binary's first user-code call after main.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            // SAFETY: nothing has spawned a thread yet, so no concurrent
+            // reader of the env table exists. Required because
+            // `std::env::set_var` is unsafe as of Rust 1.85.
+            unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+        }
+    }
+
     let mut secret = read_secret();
     eprintln!(
         "[mangaplus-reader] image cache: {}",
