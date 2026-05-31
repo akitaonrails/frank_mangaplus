@@ -245,6 +245,11 @@ describe('keyToReaderAction', () => {
     expect(keyToReaderAction('End')).toBe('jump-chapter-end');
   });
 
+  it('maps R/r to reload-images', () => {
+    expect(keyToReaderAction('r')).toBe('reload-images');
+    expect(keyToReaderAction('R')).toBe('reload-images');
+  });
+
   it('maps "?" to the help modal', () => {
     expect(keyToReaderAction('?')).toBe('open-help');
   });

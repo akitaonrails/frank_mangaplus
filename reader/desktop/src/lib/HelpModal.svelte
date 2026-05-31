@@ -56,6 +56,7 @@
         <dl>
           <dt><kbd>D</kbd></dt><dd>Cycle layout: single → double → cover-offset double</dd>
           <dt><kbd>F</kbd></dt><dd>Cycle eye-protection filter: off → low → med → high</dd>
+          <dt><kbd>R</kbd></dt><dd>Reload any images that failed to load</dd>
         </dl>
       </section>
 

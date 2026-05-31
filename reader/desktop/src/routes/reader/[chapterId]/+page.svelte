@@ -147,6 +147,65 @@
     helpOpen = false;
   }
 
+  // Broken-image tracking. The CDN occasionally drops a page mid-fetch
+  // or returns a partial response; the <img> fires onerror and shows
+  // empty space (the width/height attributes still reserve the right
+  // box, so the surrounding layout stays intact). The user gets a
+  // per-image "↻ Retry" overlay button AND a global R keybinding to
+  // refetch every failed image at once.
+  //
+  // imageRetryGen is a counter appended to image URLs as a fragment so
+  // the browser treats a retry as a fresh request — the same trick the
+  // browser DevTools "Empty cache + hard reload" button uses.
+  let failedImageUrls: Set<string> = $state(new Set());
+  let imageRetryGen = $state(0);
+
+  function imageSrc(url: string): string {
+    const base = proxied(url);
+    // Fragments don't reach the server (the mpimg handler strips them
+    // before forwarding to the CDN), but the browser sees the full
+    // URL as distinct from the previous one, so it refetches.
+    return imageRetryGen > 0 && failedImageUrls.has(url)
+      ? `${base}#retry=${imageRetryGen}`
+      : base;
+  }
+
+  function onImageError(url: string) {
+    if (!failedImageUrls.has(url)) {
+      failedImageUrls = setWithStr(failedImageUrls, url);
+    }
+  }
+
+  function onImageLoad(url: string) {
+    // Clear from the failed set if a previous retry succeeded.
+    if (failedImageUrls.has(url)) {
+      failedImageUrls = setWithoutStr(failedImageUrls, url);
+    }
+  }
+
+  function retryImage(url: string) {
+    // Force a refetch by bumping the gen counter; the imageSrc() helper
+    // appends it to this URL's src so the <img> re-requests through
+    // mpimg://.
+    imageRetryGen += 1;
+  }
+
+  function reloadAllImages() {
+    if (failedImageUrls.size === 0) return;
+    imageRetryGen += 1;
+  }
+
+  // String-keyed Set helpers — the existing setWith / setWithout are
+  // typed for number (chapter ids); these mirror them for string URLs.
+  function setWithStr(s: Set<string>, v: string): Set<string> {
+    return new Set(s).add(v);
+  }
+  function setWithoutStr(s: Set<string>, v: string): Set<string> {
+    const out = new Set(s);
+    out.delete(v);
+    return out;
+  }
+
   // Pages bundled into render frames. See lib/readerLogic.ts for the
   // pure grouping logic + its unit tests.
   let pageGroups: PageGroup[] = $derived(buildPageGroups(loadedPages, pageMode));
@@ -591,6 +650,7 @@
       case 'jump-chapter-end':       jumpToChapterEdge('end');   break;
       case 'toggle-page-mode':       togglePageMode(); break;
       case 'toggle-eye-filter':      toggleEyeFilter(); break;
+      case 'reload-images':          reloadAllImages(); break;
       case 'open-help':              openHelp(); break;
       case 'go-back':                goBack(); break;
     }
@@ -745,25 +805,36 @@
           >
             {#each group.pages as lp, pi (lp.mp.imageUrl)}
               <!--
-                width + height attrs let the browser reserve the correct
-                aspect-ratio'd space BEFORE the image bytes arrive — no
-                Cumulative Layout Shift. Without these, each image's
-                arrival reflows the page-stack and bumps the user's
-                scroll position downward (very visible in double mode
-                because two images load in parallel with possibly
-                different aspect ratios). max-width / max-height in CSS
-                still cap the rendered size; these attrs only fix the
-                pre-load reservation.
+                width + height attrs reserve the correct aspect-ratio'd
+                space before bytes arrive (prevents Cumulative Layout
+                Shift). onerror/onload track per-image fetch outcome so
+                we can surface a retry overlay; the imageSrc helper
+                appends a fragment when retrying so the browser refetches.
               -->
-              <img
-                src={proxied(lp.mp.imageUrl)}
-                alt="Page {group.firstPageIndex + pi + 1}"
-                width={lp.mp.width}
-                height={lp.mp.height}
-                loading={group.firstPageIndex + pi < 3 ? 'eager' : 'lazy'}
-                decoding="async"
-                class="manga-page"
-              />
+              <div class="page-image-wrapper">
+                <img
+                  src={imageSrc(lp.mp.imageUrl)}
+                  alt="Page {group.firstPageIndex + pi + 1}"
+                  width={lp.mp.width}
+                  height={lp.mp.height}
+                  loading={group.firstPageIndex + pi < 3 ? 'eager' : 'lazy'}
+                  decoding="async"
+                  class="manga-page"
+                  class:failed={failedImageUrls.has(lp.mp.imageUrl)}
+                  onerror={() => onImageError(lp.mp.imageUrl)}
+                  onload={() => onImageLoad(lp.mp.imageUrl)}
+                />
+                {#if failedImageUrls.has(lp.mp.imageUrl)}
+                  <button
+                    class="image-retry-btn"
+                    type="button"
+                    aria-label="Retry loading page {group.firstPageIndex + pi + 1}"
+                    onclick={(e) => { e.stopPropagation(); retryImage(lp.mp.imageUrl); }}
+                  >
+                    ↻ Reload page {group.firstPageIndex + pi + 1}
+                  </button>
+                {/if}
+              </div>
             {/each}
             <!-- RTL click zones: left half advances, right half goes back -->
             <button
@@ -1044,6 +1115,51 @@
   .page-frame.is-pair .manga-page {
     /* Each image in a pair shares the available width. */
     max-width: 50%;
+  }
+
+  /* Per-image wrapper holds the <img> and the retry-overlay button
+     together so the overlay is positioned relative to its own image,
+     not the whole frame (important in double-pair mode where one of
+     two images may have failed). */
+  .page-image-wrapper {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    /* In a flex pair, each wrapper shrinks to its image's intrinsic
+       width up to the 50% cap from the page-frame.is-pair rule. */
+  }
+  .page-frame.is-pair .page-image-wrapper {
+    max-width: 50%;
+    flex: 0 1 auto;
+  }
+
+  .manga-page.failed {
+    /* Tint the empty reserved space so the user can see what's broken
+       at a glance, even before they read the retry-button text. */
+    background: rgba(239, 83, 80, 0.06);
+    border: 1px dashed rgba(239, 83, 80, 0.4);
+  }
+
+  .image-retry-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    z-index: 3; /* above the click zones */
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+    transition: background 0.15s, color 0.15s;
+  }
+  .image-retry-btn:hover {
+    background: var(--accent);
+    color: #fff;
   }
 
   .click-zone {
