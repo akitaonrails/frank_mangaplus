@@ -17,8 +17,30 @@
     type PageMode,
     type EyeFilter,
   } from '$lib/readState';
+  import {
+    buildPageGroups,
+    scanChapterBounds,
+    chapterIdAfter,
+    chapterIdBefore,
+    findGroupContainingPage,
+    keyToReaderAction,
+    type LoadedPage,
+    type PageGroup,
+  } from '$lib/readerLogic';
   import { proxied } from '$lib/img';
   import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
+
+  /** Immutable Set update helpers — Svelte 5 needs a new reference to
+   *  notice the change, and `new Set(old).add(x)` was repeated in 6+
+   *  places before this refactor. */
+  function setWith(s: Set<number>, n: number): Set<number> {
+    return new Set(s).add(n);
+  }
+  function setWithout(s: Set<number>, n: number): Set<number> {
+    const out = new Set(s);
+    out.delete(n);
+    return out;
+  }
 
   // Start fetching the next chapter when the user is this close (in
   // currently-loaded pages) to the end of the loaded scroll. Tuned to
@@ -42,10 +64,12 @@
   let initialViewer: MangaViewer | null = $state(null);
 
   // Flat list of (page, owning-chapter-id) so we can show a header
-  // when chapter changes mid-scroll.
-  type LoadedPage = { mp: MangaPage; chapterId: number; chapterName: string };
+  // when chapter changes mid-scroll. LoadedPage shape lives in
+  // lib/readerLogic.ts so the pure helpers can be unit-tested.
   let loadedPages: LoadedPage[] = $state([]);
-  let loadedChapterIds = new Set<number>();
+  // $state so it's reactive on a par with prefetching/failedChapterIds;
+  // immutable updates use the setWith / setWithout helpers above.
+  let loadedChapterIds: Set<number> = $state(new Set());
 
   // Ordered chapter list of the parent title, ascending by chapter_id
   // (so "next" means next in publication order).
@@ -106,49 +130,9 @@
   // persisted, also survives reloads.
   let eyeFilter: EyeFilter = $state('off');
 
-  // Pages bundled into render frames. In single mode every page is its
-  // own group; in double mode adjacent pages from the *same chapter*
-  // pair up. Never pair across chapter boundaries — would mix two
-  // chapters into a single rendered frame.
-  type PageGroup = {
-    pages: LoadedPage[];
-    /** Index in loadedPages of the first page in this group. */
-    firstPageIndex: number;
-  };
-  let pageGroups: PageGroup[] = $derived.by(() => {
-    if (pageMode === 'single') {
-      return loadedPages.map((p, i) => ({ pages: [p], firstPageIndex: i }));
-    }
-    const groups: PageGroup[] = [];
-    let i = 0;
-    // In double-cover mode the first page of each chapter ships solo so
-    // pairing starts on the next page — matches how printed manga binds
-    // a cover singly before the first spread.
-    let coverOffsetActive = pageMode === 'double-cover';
-    let currentChapter = loadedPages[0]?.chapterId;
-    while (i < loadedPages.length) {
-      const a = loadedPages[i];
-      if (a.chapterId !== currentChapter) {
-        currentChapter = a.chapterId;
-        if (pageMode === 'double-cover') coverOffsetActive = true;
-      }
-      if (coverOffsetActive) {
-        groups.push({ pages: [a], firstPageIndex: i });
-        coverOffsetActive = false;
-        i += 1;
-        continue;
-      }
-      const b = loadedPages[i + 1];
-      if (b && b.chapterId === a.chapterId) {
-        groups.push({ pages: [a, b], firstPageIndex: i });
-        i += 2;
-      } else {
-        groups.push({ pages: [a], firstPageIndex: i });
-        i += 1;
-      }
-    }
-    return groups;
-  });
+  // Pages bundled into render frames. See lib/readerLogic.ts for the
+  // pure grouping logic + its unit tests.
+  let pageGroups: PageGroup[] = $derived(buildPageGroups(loadedPages, pageMode));
 
   // Currently-visible group (0-indexed into pageGroups).
   let currentGroup = $state(0);
@@ -168,34 +152,13 @@
   let visibleChapterId = $derived(loadedPages[currentPageIndex]?.chapterId ?? 0);
 
   // Chapter-local stats for the header indicator + footer progress bar.
-  // Computed by scanning backward/forward from currentPageIndex through
-  // loadedPages, because chapter pages are guaranteed contiguous (we
-  // appendChapter() a whole chapter's pages at a time and never insert
-  // anywhere but the end). Scanning is more robust than findIndex on
-  // visibleChapterId — those two values can momentarily drift apart
-  // during Svelte 5's reactive update pass, and a stale findIndex returns
-  // -1 → Math.max(0, -1) = 0 → indicator wrongly reads "1+currentPageIndex"
-  // (Kaiju No. 8 ex → #077 showed "page 11 of N" because the ex chapter
-  // had 10 pages and #077's first page was at currentPageIndex=10).
-  let currentChapterFirstIndex = $derived.by(() => {
-    const here = loadedPages[currentPageIndex];
-    if (!here) return 0;
-    const chId = here.chapterId;
-    let i = currentPageIndex;
-    while (i > 0 && loadedPages[i - 1]?.chapterId === chId) i--;
-    return i;
-  });
-  let chapterPageCount = $derived.by(() => {
-    const start = currentChapterFirstIndex;
-    const here = loadedPages[start];
-    if (!here) return loadedPages.length;
-    const chId = here.chapterId;
-    let count = 0;
-    for (let i = start; i < loadedPages.length && loadedPages[i].chapterId === chId; i++) {
-      count++;
-    }
-    return count;
-  });
+  // Single $derived call to scanChapterBounds — see lib/readerLogic.ts
+  // for the impl + tests. Pulling the scan out as a pure function
+  // dropped the previous three derived chains down to one and gives us
+  // explicit regression coverage on the Kaiju ex → #077 transition.
+  let chapterBounds = $derived(scanChapterBounds(loadedPages, currentPageIndex));
+  let currentChapterFirstIndex = $derived(chapterBounds.firstIndex);
+  let chapterPageCount = $derived(chapterBounds.count);
   let pageInChapter = $derived(currentPageIndex - currentChapterFirstIndex + 1);
 
   // ---------- load ----------
@@ -275,22 +238,21 @@
       }
 
       // Resume reading: if we left this chapter mid-read last time,
-      // scroll to that page. Wait for frames to bind first, then find
-      // the group containing the saved page and jump there. Suppresses
-      // the chapter-change flash since this is the initial mount.
+      // scroll to that page. await tick() flushes the bind:this on the
+      // new frames; without it, the scrollIntoView call below targets a
+      // DOM element that hasn't been bound yet and silently no-ops.
+      // (queueMicrotask was the prior fix — tick() is the correct one,
+      // since Svelte's reactive updates may happen later than a single
+      // microtask hop.)
       const resumePage = getLastReadPage(chapterId);
       if (resumePage && resumePage > 1) {
-        queueMicrotask(() => {
-          const targetGroup = pageGroups.findIndex(g =>
-            g.firstPageIndex <= resumePage - 1 &&
-            resumePage - 1 < g.firstPageIndex + g.pages.length
-          );
-          if (targetGroup > 0 && frameEls[targetGroup]) {
-            // 'instant' so the user lands where they were without a
-            // visible scroll animation from page 1.
-            frameEls[targetGroup].scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'start' });
-          }
-        });
+        await tick();
+        const targetGroup = findGroupContainingPage(pageGroups, resumePage - 1);
+        if (targetGroup > 0 && frameEls[targetGroup]) {
+          // 'instant' so the user lands where they were without a
+          // visible scroll animation from page 1.
+          frameEls[targetGroup].scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'start' });
+        }
       }
     } catch (e) {
       error = String(e);
@@ -301,7 +263,7 @@
 
   function appendChapter(v: MangaViewer) {
     if (loadedChapterIds.has(v.chapterId)) return;
-    loadedChapterIds.add(v.chapterId);
+    loadedChapterIds = setWith(loadedChapterIds, v.chapterId);
     const pagesOnly = (v.pages ?? [])
       .map(p => p.data?.mangaPage)
       .filter((mp): mp is MangaPage => !!mp);
@@ -309,12 +271,6 @@
       ...loadedPages,
       ...pagesOnly.map(mp => ({ mp, chapterId: v.chapterId, chapterName: v.chapterName })),
     ];
-  }
-
-  function nextChapterIdAfter(chId: number): number | null {
-    const i = allChapters.findIndex(c => c.chapterId === chId);
-    if (i < 0 || i === allChapters.length - 1) return null;
-    return allChapters[i + 1].chapterId;
   }
 
   // When the user is within PREFETCH_TRIGGER_DISTANCE pages of the end
@@ -337,56 +293,41 @@
     if (!force && distanceToEnd > PREFETCH_TRIGGER_DISTANCE) return;
 
     const lastLoadedChapter = loadedPages[loadedPages.length - 1].chapterId;
-    const nextId = nextChapterIdAfter(lastLoadedChapter);
+    const nextId = chapterIdAfter(allChapters, lastLoadedChapter);
     if (nextId == null) return;
     if (loadedChapterIds.has(nextId)) return;
     if (prefetchingChapterIds.has(nextId)) return;
     if (!force && failedChapterIds.has(nextId)) return;
 
-    // Mark in-flight. Use a fresh Set so the $derived(fetchingNext)
-    // observes the change.
-    prefetchingChapterIds = new Set(prefetchingChapterIds).add(nextId);
-    // On forced retry, clear the failure flag so a subsequent
-    // non-forced trigger can fire again if the user keeps reading.
-    if (force && failedChapterIds.has(nextId)) {
-      const updated = new Set(failedChapterIds);
-      updated.delete(nextId);
-      failedChapterIds = updated;
-    }
+    // Mark in-flight (a fresh Set so the $derived fetchingNext flips).
+    prefetchingChapterIds = setWith(prefetchingChapterIds, nextId);
+    // On forced retry, clear any prior failure so the same chapter can
+    // be revisited if it fails again.
+    if (force) failedChapterIds = setWithout(failedChapterIds, nextId);
 
     const v = await fetchChapter(nextId);
 
-    // Always release the in-flight flag.
-    const next = new Set(prefetchingChapterIds);
-    next.delete(nextId);
-    prefetchingChapterIds = next;
-
+    prefetchingChapterIds = setWithout(prefetchingChapterIds, nextId);
     if (v) {
       appendChapter(v);
     } else {
-      // Stamp the failure so we stop auto-retrying. Manual retry via
-      // the "Load next chapter" / "Retry chapter X" button clears it.
-      failedChapterIds = new Set(failedChapterIds).add(nextId);
+      // Auto-prefetch stops re-firing for this chapter; manual retry
+      // (Load next / Retry button) clears the flag via force=true.
+      failedChapterIds = setWith(failedChapterIds, nextId);
     }
   }
 
-  /** Name of the chapter sitting just after the last loaded chapter, if
-   * any — used to label the failure UI. */
-  let nextChapterName = $derived.by(() => {
-    if (loadedPages.length === 0) return '';
+  /** Id, name, failure-status of the chapter sitting just after the
+   *  last loaded chapter. Returns null when no next chapter exists or
+   *  loadedPages is empty. The footer UI consumes this for the
+   *  prefetch-error block and the "Load next chapter" hatch. */
+  let nextChapterInfo = $derived.by(() => {
+    if (loadedPages.length === 0) return null;
     const lastChId = loadedPages[loadedPages.length - 1].chapterId;
-    const nextId = nextChapterIdAfter(lastChId);
-    if (nextId == null) return '';
-    return allChapters.find(c => c.chapterId === nextId)?.name ?? '';
-  });
-
-  /** True when the next chapter exists, isn't loaded, and the last
-   * attempt to fetch it failed. The footer surfaces a retry button. */
-  let nextChapterFailed = $derived.by(() => {
-    if (loadedPages.length === 0) return false;
-    const lastChId = loadedPages[loadedPages.length - 1].chapterId;
-    const nextId = nextChapterIdAfter(lastChId);
-    return nextId != null && failedChapterIds.has(nextId);
+    const nextId = chapterIdAfter(allChapters, lastChId);
+    if (nextId == null) return null;
+    const name = allChapters.find(c => c.chapterId === nextId)?.name ?? '';
+    return { id: nextId, name, failed: failedChapterIds.has(nextId) };
   });
 
   // Mark chapters as read as the user scrolls through them.
@@ -517,18 +458,17 @@
     setEyeFilter(eyeFilter);
   }
 
-  function togglePageMode() {
+  async function togglePageMode() {
     pageMode = nextPageMode(pageMode);
     setPageMode(pageMode);
-    // After regrouping, settle on the group that contains the page
-    // the user was just on, so the toggle doesn't jump them around.
-    const oldFirstPage = currentPageIndex;
-    queueMicrotask(() => {
-      const target = pageGroups.findIndex(g =>
-        g.pages.some((_, i) => g.firstPageIndex + i === oldFirstPage)
-      );
-      if (target >= 0) goToGroupIndex(target);
-    });
+    // After regrouping, settle on the group that contains the page the
+    // user was just on, so the toggle doesn't visually jump them.
+    // await tick() flushes the pageGroups recomputation + frame
+    // re-bindings before we look up the new group index.
+    const oldPageIndex = currentPageIndex;
+    await tick();
+    const target = findGroupContainingPage(pageGroups, oldPageIndex);
+    if (target >= 0) goToGroupIndex(target);
   }
 
   // Unified navigation: every forward/back input (keys, click zones)
@@ -548,7 +488,7 @@
       // At end of loaded scroll — pull next chapter and then jump in.
       const lastChId = loadedPages[loadedPages.length - 1]?.chapterId;
       if (lastChId == null) return;
-      if (nextChapterIdAfter(lastChId) == null) return; // truly end of title
+      if (chapterIdAfter(allChapters, lastChId) == null) return; // truly end of title
       await maybePrefetchNext(true);
       // Wait for Svelte to flush the new pageGroups → frameEls bindings.
       // Without this tick(), goToGroupIndex hits frameEls[N+1] before
@@ -572,7 +512,7 @@
       // mount keeps the IntersectionObserver and scroll state sane.
       const firstChId = loadedPages[0]?.chapterId;
       if (firstChId == null) return;
-      const prevId = prevChapterIdBefore(firstChId);
+      const prevId = chapterIdBefore(allChapters, firstChId);
       if (prevId == null) return;
       const qs = new URLSearchParams();
       if (clang !== DEFAULT_CLANG) qs.set('clang', clang);
@@ -583,35 +523,17 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    // Vertical scroll keys: smooth-scroll style, no horizontal flip.
-    if (
-      e.key === 'ArrowDown' || e.key === 'j' || e.key === ' ' || e.key === 'PageDown'
-    ) {
-      e.preventDefault();
-      void advance('forward', 'scroll');
-    } else if (
-      e.key === 'ArrowUp' || e.key === 'k' || e.key === 'PageUp'
-    ) {
-      e.preventDefault();
-      void advance('back', 'scroll');
-    }
-    // Horizontal manga-RTL keys: page-flip animation.
-    else if (e.key === 'ArrowLeft') {
-      e.preventDefault();
-      void advance('forward', 'flip');
-    } else if (e.key === 'ArrowRight') {
-      e.preventDefault();
-      void advance('back', 'flip');
-    }
-    // Other shortcuts.
-    else if (e.key === 'd' || e.key === 'D') {
-      e.preventDefault();
-      togglePageMode();
-    } else if (e.key === 'f' || e.key === 'F') {
-      e.preventDefault();
-      toggleEyeFilter();
-    } else if (e.key === 'Escape') {
-      goBack();
+    const action = keyToReaderAction(e.key);
+    if (action == null) return; // unbound, let the browser handle it
+    e.preventDefault();
+    switch (action) {
+      case 'advance-forward-scroll': void advance('forward', 'scroll'); break;
+      case 'advance-back-scroll':    void advance('back',    'scroll'); break;
+      case 'advance-forward-flip':   void advance('forward', 'flip');   break;
+      case 'advance-back-flip':      void advance('back',    'flip');   break;
+      case 'toggle-page-mode':       togglePageMode(); break;
+      case 'toggle-eye-filter':      toggleEyeFilter(); break;
+      case 'go-back':                goBack(); break;
     }
   }
 
@@ -787,9 +709,9 @@
         {#if fetchingNext}
           <div class="loading-next">
             <div class="spinner"></div>
-            <span>loading next chapter{nextChapterName ? ` (${nextChapterName})` : ''}…</span>
+            <span>loading next chapter{nextChapterInfo?.name ? ` (${nextChapterInfo.name})` : ''}…</span>
           </div>
-        {:else if loadedPages.length > 0 && nextChapterIdAfter(loadedPages[loadedPages.length - 1].chapterId) == null}
+        {:else if loadedPages.length > 0 && nextChapterInfo == null}
           <!-- True end of the title — no further chapter exists in the
                catalog at this language/country. -->
           <div class="end-of-title">
@@ -798,16 +720,16 @@
             <p>No further chapters are available right now. New releases drop on the schedule MANGA Plus publishes — check back later.</p>
             <button class="back-to-title-btn" onclick={goBack}>Back to title page</button>
           </div>
-        {:else if nextChapterFailed}
+        {:else if nextChapterInfo?.failed}
           <!-- Previous prefetch failed (timeout, network, server error).
                Auto-retry is suppressed via failedChapterIds so the user
                isn't trapped in a spinner storm; manual retry clears the
                failure flag and re-runs maybePrefetchNext with force=true. -->
           <div class="prefetch-error">
-            <p>Couldn't load <strong>{nextChapterName || 'the next chapter'}</strong>.</p>
+            <p>Couldn't load <strong>{nextChapterInfo.name || 'the next chapter'}</strong>.</p>
             <p class="hint">May be rate-limited or temporarily unavailable.</p>
             <button class="retry-btn" onclick={() => void maybePrefetchNext(true)}>
-              ↻ Retry {nextChapterName || 'next chapter'}
+              ↻ Retry {nextChapterInfo.name || 'next chapter'}
             </button>
           </div>
         {:else if loadedPages.length > 0}
