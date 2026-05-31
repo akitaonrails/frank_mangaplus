@@ -124,6 +124,24 @@
   let visibleChapterName = $derived(loadedPages[currentPageIndex]?.chapterName ?? '');
   let visibleChapterId = $derived(loadedPages[currentPageIndex]?.chapterId ?? 0);
 
+  // Chapter-local stats for the header indicator + footer progress bar.
+  // currentPage / loadedPages.length used to leak the running global
+  // page index across all loaded chapters — landing on chapter B's
+  // page 1 after chapter A's 108 pages had been loaded would display
+  // "109 / 151" instead of "1 / 43". These derived values are scoped
+  // to the chapter the user is actually reading.
+  let currentChapterFirstIndex = $derived.by(() =>
+    visibleChapterId
+      ? Math.max(0, loadedPages.findIndex(p => p.chapterId === visibleChapterId))
+      : 0
+  );
+  let chapterPageCount = $derived(
+    visibleChapterId
+      ? loadedPages.filter(p => p.chapterId === visibleChapterId).length
+      : loadedPages.length
+  );
+  let pageInChapter = $derived(currentPageIndex - currentChapterFirstIndex + 1);
+
   // ---------- load ----------
 
   onMount(() => {
@@ -292,14 +310,8 @@
     }
     // Persist the user's current reading position per-chapter so
     // re-opening this chapter later resumes here.
-    if (visibleChapterId && currentPage >= 1 && loadedPages[currentPageIndex]) {
-      // currentPage is 1-indexed across all loaded chapters; convert
-      // to chapter-local page number by subtracting the index of the
-      // chapter's first page.
-      const chapterFirstIdx = loadedPages.findIndex(p => p.chapterId === visibleChapterId);
-      if (chapterFirstIdx >= 0) {
-        setLastReadPage(visibleChapterId, currentPageIndex - chapterFirstIdx + 1);
-      }
+    if (visibleChapterId && pageInChapter >= 1) {
+      setLastReadPage(visibleChapterId, pageInChapter);
     }
     // Also fire prefetch check whenever currentPage moves.
     void maybePrefetchNext();
@@ -585,11 +597,11 @@
     </button>
 
     <span class="page-indicator">
-      {#if loadedPages.length > 0}
+      {#if chapterPageCount > 0}
         {#if currentGroupSize === 2}
-          {currentPage}-{currentPage + 1} / {loadedPages.length}{#if fetchingNext}…{/if}
+          {pageInChapter}-{pageInChapter + 1} / {chapterPageCount}{#if fetchingNext}…{/if}
         {:else}
-          {currentPage} / {loadedPages.length}{#if fetchingNext}…{/if}
+          {pageInChapter} / {chapterPageCount}{#if fetchingNext}…{/if}
         {/if}
       {/if}
     </span>
@@ -694,9 +706,9 @@
       <!-- Bar fills from the right edge to reflect manga RTL reading direction. -->
       <div
         class="progress-bar"
-        style:width={(currentPage / loadedPages.length) * 100 + '%'}
+        style:width={chapterPageCount > 0 ? (pageInChapter / chapterPageCount) * 100 + '%' : '0%'}
       ></div>
-      <span class="progress-label">Page {currentPage} of {loadedPages.length}</span>
+      <span class="progress-label">Page {pageInChapter} of {chapterPageCount}</span>
     </footer>
   {/if}
 </div>
