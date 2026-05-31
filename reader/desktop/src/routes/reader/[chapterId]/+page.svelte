@@ -125,21 +125,34 @@
   let visibleChapterId = $derived(loadedPages[currentPageIndex]?.chapterId ?? 0);
 
   // Chapter-local stats for the header indicator + footer progress bar.
-  // currentPage / loadedPages.length used to leak the running global
-  // page index across all loaded chapters — landing on chapter B's
-  // page 1 after chapter A's 108 pages had been loaded would display
-  // "109 / 151" instead of "1 / 43". These derived values are scoped
-  // to the chapter the user is actually reading.
-  let currentChapterFirstIndex = $derived.by(() =>
-    visibleChapterId
-      ? Math.max(0, loadedPages.findIndex(p => p.chapterId === visibleChapterId))
-      : 0
-  );
-  let chapterPageCount = $derived(
-    visibleChapterId
-      ? loadedPages.filter(p => p.chapterId === visibleChapterId).length
-      : loadedPages.length
-  );
+  // Computed by scanning backward/forward from currentPageIndex through
+  // loadedPages, because chapter pages are guaranteed contiguous (we
+  // appendChapter() a whole chapter's pages at a time and never insert
+  // anywhere but the end). Scanning is more robust than findIndex on
+  // visibleChapterId — those two values can momentarily drift apart
+  // during Svelte 5's reactive update pass, and a stale findIndex returns
+  // -1 → Math.max(0, -1) = 0 → indicator wrongly reads "1+currentPageIndex"
+  // (Kaiju No. 8 ex → #077 showed "page 11 of N" because the ex chapter
+  // had 10 pages and #077's first page was at currentPageIndex=10).
+  let currentChapterFirstIndex = $derived.by(() => {
+    const here = loadedPages[currentPageIndex];
+    if (!here) return 0;
+    const chId = here.chapterId;
+    let i = currentPageIndex;
+    while (i > 0 && loadedPages[i - 1]?.chapterId === chId) i--;
+    return i;
+  });
+  let chapterPageCount = $derived.by(() => {
+    const start = currentChapterFirstIndex;
+    const here = loadedPages[start];
+    if (!here) return loadedPages.length;
+    const chId = here.chapterId;
+    let count = 0;
+    for (let i = start; i < loadedPages.length && loadedPages[i].chapterId === chId; i++) {
+      count++;
+    }
+    return count;
+  });
   let pageInChapter = $derived(currentPageIndex - currentChapterFirstIndex + 1);
 
   // ---------- load ----------
