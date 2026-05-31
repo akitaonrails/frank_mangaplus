@@ -150,52 +150,81 @@
     helpOpen = false;
   }
 
-  // Broken-image tracking. The CDN occasionally drops a page mid-fetch
-  // or returns a partial response; the <img> fires onerror and shows
-  // empty space (the width/height attributes still reserve the right
-  // box, so the surrounding layout stays intact). The user gets a
-  // per-image "↻ Retry" overlay button AND a global R keybinding to
-  // refetch every failed image at once.
+  // Broken-image tracking. The CDN sometimes drops a page mid-fetch or
+  // returns a partial response; the <img> fires onerror and the
+  // surrounding layout stays correct (width/height attrs reserve the
+  // box) but the user sees an empty slot.
   //
-  // imageRetryGen is a counter appended to image URLs as a fragment so
-  // the browser treats a retry as a fresh request — the same trick the
-  // browser DevTools "Empty cache + hard reload" button uses.
+  // Recovery strategy is two-tier:
+  //   1. Soft auto-retry, up to MAX_AUTO_RETRIES, with a short delay
+  //      between attempts. The browser sees a new src each time (we
+  //      append a fragment counter the mpimg handler strips before
+  //      forwarding to the CDN), so it re-requests cleanly. Most
+  //      transient CDN blips clear within one retry.
+  //   2. Only after auto-retries are exhausted do we mark the URL as
+  //      failed and surface the manual "↻ Reload" overlay button + the
+  //      global R keybinding.
+  //
+  // This avoids the prior "give up on the first error" behaviour while
+  // also bounding the work so a dead URL can't trigger infinite retries.
+  const MAX_AUTO_RETRIES = 3;
+  const AUTO_RETRY_DELAY_MS = 600;
+  let imageAttempts: Map<string, number> = $state(new Map());
   let failedImageUrls: Set<string> = $state(new Set());
-  let imageRetryGen = $state(0);
 
   function imageSrc(url: string): string {
     const base = proxied(url);
-    // Fragments don't reach the server (the mpimg handler strips them
-    // before forwarding to the CDN), but the browser sees the full
-    // URL as distinct from the previous one, so it refetches.
-    return imageRetryGen > 0 && failedImageUrls.has(url)
-      ? `${base}#retry=${imageRetryGen}`
-      : base;
+    const n = imageAttempts.get(url) ?? 0;
+    // Fragments don't reach the server — the mpimg custom protocol
+    // handler in lib.rs strips them — but they change what the browser
+    // sees as the src, forcing a fresh request.
+    return n > 0 ? `${base}#attempt=${n}` : base;
   }
 
   function onImageError(url: string) {
-    if (!failedImageUrls.has(url)) {
-      failedImageUrls = setWithStr(failedImageUrls, url);
+    const attempts = imageAttempts.get(url) ?? 0;
+    if (attempts >= MAX_AUTO_RETRIES) {
+      // Auto-retry budget exhausted. Show the manual hatch.
+      if (!failedImageUrls.has(url)) {
+        failedImageUrls = setWithStr(failedImageUrls, url);
+      }
+      return;
     }
+    // Schedule a delayed retry; we bump the counter when the timer
+    // fires so the browser doesn't get hammered on a fast loop. The
+    // map update triggers a reactive re-render with a new src.
+    setTimeout(() => {
+      imageAttempts = new Map(imageAttempts).set(url, attempts + 1);
+    }, AUTO_RETRY_DELAY_MS);
   }
 
   function onImageLoad(url: string) {
-    // Clear from the failed set if a previous retry succeeded.
+    // A retry (auto or manual) finally succeeded — clear the failure
+    // surface. We keep the attempts count so a later transient error
+    // doesn't reset the budget.
     if (failedImageUrls.has(url)) {
       failedImageUrls = setWithoutStr(failedImageUrls, url);
     }
   }
 
   function retryImage(url: string) {
-    // Force a refetch by bumping the gen counter; the imageSrc() helper
-    // appends it to this URL's src so the <img> re-requests through
-    // mpimg://.
-    imageRetryGen += 1;
+    // Manual retry beyond the auto-budget — bump attempts and clear
+    // failure so the overlay disappears while the new fetch is in
+    // flight. If THIS attempt fails too, onImageError sees attempts
+    // already >= MAX and immediately re-adds to failedImageUrls.
+    const attempts = (imageAttempts.get(url) ?? 0) + 1;
+    imageAttempts = new Map(imageAttempts).set(url, attempts);
+    failedImageUrls = setWithoutStr(failedImageUrls, url);
   }
 
   function reloadAllImages() {
     if (failedImageUrls.size === 0) return;
-    imageRetryGen += 1;
+    const next = new Map(imageAttempts);
+    for (const url of failedImageUrls) {
+      next.set(url, (next.get(url) ?? 0) + 1);
+    }
+    imageAttempts = next;
+    failedImageUrls = new Set();
   }
 
   // String-keyed Set helpers — the existing setWith / setWithout are
