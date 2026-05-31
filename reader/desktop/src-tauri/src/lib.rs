@@ -3,6 +3,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::http::Response;
 
+// GPU + display-server detection and render-mode policy.
+// Pure logic + tests live in render_env.rs; this module is wired into
+// run() to replace the previous unconditional WEBKIT_DISABLE_*
+// approach.
+#[cfg(target_os = "linux")]
+mod render_env;
+
 /// Shared state held by Tauri and handed to every command invocation.
 /// The client is wrapped in a Mutex so we can swap it out when the user
 /// pastes a new secret via the setup dialog without restarting the app.
