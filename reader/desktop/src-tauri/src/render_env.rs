@@ -32,7 +32,7 @@
 // exercise everything here.
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// GPU vendor identified from sysfs's `device/vendor` hex code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +291,120 @@ pub unsafe fn apply_mode(mode: RenderMode) {
     }
 }
 
+// ---------- crash-recovery marker + config file paths ----------
+//
+// Both files live in the same config_dir as the existing `secret` file
+// (~/.config/mangaplus-reader on Linux). Layout:
+//
+//   secret               (already there)
+//   auto-registered      (already there)
+//   render.conf          (this commit; user override)
+//   render-recovery      (this commit; touched on startup, removed by
+//                         the frontend mark_app_ready command)
+//
+// The recovery file's mere existence is the signal — its contents are
+// ignored.
+
+/// Path of the user-editable render config: `<config_dir>/render.conf`.
+pub fn render_config_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("render.conf")
+}
+
+/// Path of the crash-recovery marker: `<config_dir>/render-recovery`.
+pub fn recovery_marker_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("render-recovery")
+}
+
+/// Path of the human-readable state dump: `<config_dir>/render-state.log`.
+/// Written on every launch so users can `cat` it to see what was applied.
+pub fn render_state_log_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("render-state.log")
+}
+
+/// Read the user override, preferring the env var over the config file.
+/// `env_value` is what callers got from std::env::var; passing it in
+/// keeps this function unit-testable. `config_dir` is checked for a
+/// `render.conf` file with a `mode = ...` line.
+pub fn resolve_user_override(
+    env_value: Option<&str>,
+    config_dir: &Path,
+) -> Option<ModeOverride> {
+    if let Some(s) = env_value {
+        if let Some(o) = parse_mode_override(s) {
+            return Some(o);
+        }
+    }
+    let body = std::fs::read_to_string(render_config_path(config_dir)).ok()?;
+    parse_config_mode(&body)
+}
+
+/// True when the previous launch left a recovery marker behind.
+pub fn is_recovery_needed(config_dir: &Path) -> bool {
+    recovery_marker_path(config_dir).exists()
+}
+
+/// Create the recovery marker at the start of a launch. Best-effort —
+/// if writing fails (read-only home, etc.) we silently continue; the
+/// only downside is that a future crash wouldn't auto-recover.
+pub fn create_recovery_marker(config_dir: &Path) {
+    let path = recovery_marker_path(config_dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, "1");
+}
+
+/// Remove the recovery marker. Called from the Tauri `mark_app_ready`
+/// command after the frontend finishes its first render.
+pub fn clear_recovery_marker(config_dir: &Path) {
+    let _ = std::fs::remove_file(recovery_marker_path(config_dir));
+}
+
+/// Write a one-shot snapshot of what was decided + what was applied
+/// to <config_dir>/render-state.log so users can inspect it from a
+/// terminal. Overwrites the file each launch — no log rotation.
+pub fn write_state_log(
+    config_dir: &Path,
+    mode: RenderMode,
+    reason: &str,
+    display: DisplayServer,
+    gpu: GpuVendor,
+    overridden_by_user: bool,
+    recovery_active: bool,
+) {
+    let path = render_state_log_path(config_dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let env_dump = mode
+        .env_vars()
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    let body = format!(
+        "# Last-launch render policy snapshot.\n\
+         # Overwritten each launch. Override via MANGAPLUS_RENDER_MODE=...\n\
+         # or by editing {}.\n\
+         mode = {}\n\
+         reason = {}\n\
+         display = {:?}\n\
+         gpu = {:?}\n\
+         overridden_by_user = {}\n\
+         recovery_active = {}\n\
+         applied_env =\n  {}\n",
+        render_config_path(config_dir).display(),
+        mode.slug(),
+        reason,
+        display,
+        gpu,
+        overridden_by_user,
+        recovery_active,
+        if env_dump.is_empty() { "(none)".into() } else { env_dump },
+    );
+    let _ = std::fs::write(path, body);
+}
+
 // ---------- tests ----------
 
 #[cfg(test)]
@@ -432,5 +546,103 @@ trailing = ignored\n\
     #[test]
     fn parse_config_mode_returns_none_for_unknown_value() {
         assert_eq!(parse_config_mode("mode = lol"), None);
+    }
+
+    // ---------- crash-recovery + override resolution tests ----------
+
+    #[test]
+    fn resolve_user_override_env_wins_over_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(render_config_path(dir.path()), "mode = native").unwrap();
+        // Env says safe; file says native; env wins.
+        let r = resolve_user_override(Some("safe"), dir.path());
+        assert_eq!(r, Some(ModeOverride::Explicit(RenderMode::Safe)));
+    }
+
+    #[test]
+    fn resolve_user_override_falls_through_to_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(render_config_path(dir.path()), "mode = dmabuf-off\n").unwrap();
+        let r = resolve_user_override(None, dir.path());
+        assert_eq!(r, Some(ModeOverride::Explicit(RenderMode::DmabufOff)));
+    }
+
+    #[test]
+    fn resolve_user_override_returns_none_when_neither_set() {
+        let dir = tempfile::tempdir().unwrap();
+        // No file, no env.
+        assert_eq!(resolve_user_override(None, dir.path()), None);
+    }
+
+    #[test]
+    fn resolve_user_override_ignores_garbage_env_then_tries_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(render_config_path(dir.path()), "mode = safe").unwrap();
+        // Garbage env → fall through to file.
+        let r = resolve_user_override(Some("nonsense"), dir.path());
+        assert_eq!(r, Some(ModeOverride::Explicit(RenderMode::Safe)));
+    }
+
+    #[test]
+    fn recovery_marker_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_recovery_needed(dir.path()));
+        create_recovery_marker(dir.path());
+        assert!(is_recovery_needed(dir.path()));
+        clear_recovery_marker(dir.path());
+        assert!(!is_recovery_needed(dir.path()));
+        // Idempotent — clearing a non-existent marker is a silent no-op.
+        clear_recovery_marker(dir.path());
+        assert!(!is_recovery_needed(dir.path()));
+    }
+
+    #[test]
+    fn create_recovery_marker_creates_missing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested").join("config");
+        // Nested doesn't exist yet.
+        assert!(!nested.exists());
+        create_recovery_marker(&nested);
+        // create_recovery_marker should have made it + the marker file.
+        assert!(is_recovery_needed(&nested));
+    }
+
+    #[test]
+    fn write_state_log_produces_inspectable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write_state_log(
+            dir.path(),
+            RenderMode::NvidiaLight,
+            "test reason",
+            DisplayServer::Wayland,
+            GpuVendor::Nvidia,
+            false,
+            false,
+        );
+        let body = std::fs::read_to_string(render_state_log_path(dir.path())).unwrap();
+        assert!(body.contains("mode = nvidia-light"));
+        assert!(body.contains("reason = test reason"));
+        assert!(body.contains("display = Wayland"));
+        assert!(body.contains("gpu = Nvidia"));
+        // Applied env should list both NVIDIA-light vars.
+        assert!(body.contains("WEBKIT_DISABLE_DMABUF_RENDERER=1"));
+        assert!(body.contains("__NV_DISABLE_EXPLICIT_SYNC=1"));
+    }
+
+    #[test]
+    fn write_state_log_native_shows_no_env_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        write_state_log(
+            dir.path(),
+            RenderMode::Native,
+            "X11 session: WebKit defaults work reliably",
+            DisplayServer::X11,
+            GpuVendor::Amd,
+            false,
+            false,
+        );
+        let body = std::fs::read_to_string(render_state_log_path(dir.path())).unwrap();
+        assert!(body.contains("mode = native"));
+        assert!(body.contains("applied_env =\n  (none)"));
     }
 }
