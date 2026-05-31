@@ -333,19 +333,34 @@ async fn get_chapter_pages(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // WebKitGTK's DMABUF/EGL renderer crashes at startup on a lot of
-    // Wayland setups with "Could not create GBM EGL display:
-    // EGL_SUCCESS. Aborting...". Falling back to the SHM path via this
-    // env var works reliably across Mesa, AMD, NVIDIA, and X11/Wayland.
-    // Must run before any GTK/WebKit code touches anything — this
-    // function is the binary's first user-code call after main.
+    // WebKitGTK has two EGL initialisation paths that can fail on
+    // Wayland desktops:
+    //
+    //   1. The GBM/DMABUF renderer aborts with "Could not create GBM
+    //      EGL display: EGL_SUCCESS. Aborting..." on lots of
+    //      Wayland+Mesa combos.
+    //   2. The SHM (software-mapped) fallback aborts with "Could not
+    //      create default EGL display: EGL_BAD_PARAMETER. Aborting..."
+    //      on some setups — reported live on Bazzite with AMD Lucienne
+    //      under KWin Wayland.
+    //
+    // Disabling BOTH paths via the two env vars below pushes WebKit
+    // into a fully CPU-side compositing mode. The performance hit for a
+    // mostly-static manga reader is negligible — the page-flip animation
+    // and CSS sepia filter still feel fine without GPU compositing.
+    //
+    // Each var is only set if the user hasn't already set it themselves,
+    // so they can opt back in on systems where the hardware path works.
     #[cfg(target_os = "linux")]
     {
+        // SAFETY: nothing has spawned a thread yet, so no concurrent
+        // reader of the env table exists. Required because
+        // `std::env::set_var` is unsafe as of Rust 1.85.
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-            // SAFETY: nothing has spawned a thread yet, so no concurrent
-            // reader of the env table exists. Required because
-            // `std::env::set_var` is unsafe as of Rust 1.85.
             unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+        }
+        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+            unsafe { std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1") };
         }
     }
 
