@@ -51,8 +51,51 @@
   // (so "next" means next in publication order).
   let allChapters: Chapter[] = $state([]);
 
-  // Auto-advance state
-  let fetchingNext = $state(false);
+  // Auto-advance state. Three sets keep us defensive against duplicate
+  // and runaway prefetches:
+  //   loadedChapterIds    — chapters whose pages are already in
+  //                          loadedPages, no point fetching again
+  //   prefetchingChapterIds — currently mid-flight; a second fetch
+  //                          for the same chapter would just race
+  //                          itself
+  //   failedChapterIds    — chapter ids the last fetch failed for
+  //                          (timeout, network, server error); we
+  //                          stop auto-retrying these. The UI offers
+  //                          a manual retry that clears the entry
+  //                          before re-fetching.
+  let prefetchingChapterIds: Set<number> = $state(new Set());
+  let failedChapterIds: Set<number> = $state(new Set());
+  // Derived for the existing "loading next chapter…" indicator.
+  let fetchingNext = $derived(prefetchingChapterIds.size > 0);
+
+  // Timeout used for every chapter fetch (initial and prefetch). A
+  // genuine slow connection sometimes needs more than 12s — but on
+  // hangs, returning control is more important than waiting forever.
+  const CHAPTER_FETCH_TIMEOUT_MS = 12_000;
+
+  /** Wraps invoke('get_chapter_pages') with the same timeout for both
+   * loadInitial() and maybePrefetchNext(). Returns null on timeout/
+   * error rather than throwing — callers handle the null path. */
+  async function fetchChapter(chapterId: number): Promise<MangaViewer | null> {
+    try {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`timed out after ${CHAPTER_FETCH_TIMEOUT_MS}ms`)), CHAPTER_FETCH_TIMEOUT_MS),
+      );
+      return await Promise.race([
+        invoke<MangaViewer>('get_chapter_pages', {
+          chapterId,
+          imgQuality: 'super_high',
+          viewerMode: 'vertical',
+          clang,
+          countryCode: country,
+        }),
+        timeout,
+      ]);
+    } catch (e) {
+      console.warn(`[reader] fetchChapter(${chapterId}) failed:`, e);
+      return null;
+    }
+  }
 
   // Layout: single page per frame or two pages side-by-side. Wide
   // monitors benefit from double. Persisted via localStorage so the
@@ -172,14 +215,17 @@
 
   async function loadInitial() {
     const chapterId = parseInt($page.params.chapterId, 10);
+    error = '';
+    loading = true;
     try {
-      const v = await invoke<MangaViewer>('get_chapter_pages', {
-        chapterId,
-        imgQuality: 'super_high',
-        viewerMode: 'vertical',
-        clang,
-        countryCode: country,
-      });
+      const v = await fetchChapter(chapterId);
+      if (!v) {
+        // Surface a retry path instead of an infinite spinner. The
+        // user-visible error block has a Retry button that re-runs
+        // loadInitial.
+        error = `Couldn't load chapter (timed out after ${CHAPTER_FETCH_TIMEOUT_MS / 1000}s). API may be rate-limited.`;
+        return;
+      }
       initialViewer = v;
       // The manga_viewer_v3 response's `chapters` field is NOT the full
       // chapter list — for most titles past chapter 3-ish it's truncated
@@ -274,39 +320,74 @@
   // When the user is within PREFETCH_TRIGGER_DISTANCE pages of the end
   // of the last-loaded chapter, pre-fetch the next one and append.
   // Resulting pages flow continuously.
+  //
+  // Defensive guards (in order):
+  //   1. nothing loaded yet → nothing to extend from
+  //   2. user is too far from the end and force=false → wait
+  //   3. the canonical chapter list says there's no next chapter
+  //   4. next chapter is already loaded (pages in loadedPages)
+  //   5. next chapter is already being fetched (avoid the duplicate-
+  //      invoke storm that happened in v0.7.x when a slow fetch
+  //      timed out but the underlying invoke was still in flight)
+  //   6. next chapter was marked as failed and this isn't a forced
+  //      retry → don't auto-retry forever
   async function maybePrefetchNext(force = false) {
-    if (fetchingNext || loadedPages.length === 0) return;
+    if (loadedPages.length === 0) return;
     const distanceToEnd = loadedPages.length - currentPage;
     if (!force && distanceToEnd > PREFETCH_TRIGGER_DISTANCE) return;
 
     const lastLoadedChapter = loadedPages[loadedPages.length - 1].chapterId;
     const nextId = nextChapterIdAfter(lastLoadedChapter);
-    if (nextId == null || loadedChapterIds.has(nextId)) return;
+    if (nextId == null) return;
+    if (loadedChapterIds.has(nextId)) return;
+    if (prefetchingChapterIds.has(nextId)) return;
+    if (!force && failedChapterIds.has(nextId)) return;
 
-    fetchingNext = true;
-    try {
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('prefetch timed out')), 12_000),
-      );
-      const v = await Promise.race([
-        invoke<MangaViewer>('get_chapter_pages', {
-          chapterId: nextId,
-          imgQuality: 'super_high',
-          viewerMode: 'vertical',
-          clang,
-          countryCode: country,
-        }),
-        timeout,
-      ]);
+    // Mark in-flight. Use a fresh Set so the $derived(fetchingNext)
+    // observes the change.
+    prefetchingChapterIds = new Set(prefetchingChapterIds).add(nextId);
+    // On forced retry, clear the failure flag so a subsequent
+    // non-forced trigger can fire again if the user keeps reading.
+    if (force && failedChapterIds.has(nextId)) {
+      const updated = new Set(failedChapterIds);
+      updated.delete(nextId);
+      failedChapterIds = updated;
+    }
+
+    const v = await fetchChapter(nextId);
+
+    // Always release the in-flight flag.
+    const next = new Set(prefetchingChapterIds);
+    next.delete(nextId);
+    prefetchingChapterIds = next;
+
+    if (v) {
       appendChapter(v);
-    } catch (e) {
-      console.warn('[reader] prefetch next chapter failed:', e);
-    } finally {
-      // Always release the flag so the manual button (or another
-      // currentPage move) can retry, even if the call timed out.
-      fetchingNext = false;
+    } else {
+      // Stamp the failure so we stop auto-retrying. Manual retry via
+      // the "Load next chapter" / "Retry chapter X" button clears it.
+      failedChapterIds = new Set(failedChapterIds).add(nextId);
     }
   }
+
+  /** Name of the chapter sitting just after the last loaded chapter, if
+   * any — used to label the failure UI. */
+  let nextChapterName = $derived.by(() => {
+    if (loadedPages.length === 0) return '';
+    const lastChId = loadedPages[loadedPages.length - 1].chapterId;
+    const nextId = nextChapterIdAfter(lastChId);
+    if (nextId == null) return '';
+    return allChapters.find(c => c.chapterId === nextId)?.name ?? '';
+  });
+
+  /** True when the next chapter exists, isn't loaded, and the last
+   * attempt to fetch it failed. The footer surfaces a retry button. */
+  let nextChapterFailed = $derived.by(() => {
+    if (loadedPages.length === 0) return false;
+    const lastChId = loadedPages[loadedPages.length - 1].chapterId;
+    const nextId = nextChapterIdAfter(lastChId);
+    return nextId != null && failedChapterIds.has(nextId);
+  });
 
   // Mark chapters as read as the user scrolls through them.
   // chapterFlashKey is bumped on each transition so the header chapter
@@ -326,8 +407,21 @@
     if (visibleChapterId && pageInChapter >= 1) {
       setLastReadPage(visibleChapterId, pageInChapter);
     }
-    // Also fire prefetch check whenever currentPage moves.
-    void maybePrefetchNext();
+  });
+
+  // Separate effect for prefetch checks: depends only on currentPage,
+  // not on visibleChapterId/pageInChapter. The previous combined effect
+  // re-ran on every reactive dep change in this component, including
+  // loadedPages updates from a successful prefetch — which then
+  // re-triggered maybePrefetchNext immediately and queued speculative
+  // fetches for chapters far past the user. Keeping the trigger narrow
+  // means at most one extra prefetch attempt per page move.
+  let lastPrefetchPage = $state(-1);
+  $effect(() => {
+    if (currentPage !== lastPrefetchPage) {
+      lastPrefetchPage = currentPage;
+      void maybePrefetchNext();
+    }
   });
 
   // ---------- nav ----------
@@ -624,7 +718,10 @@
     {#if loading}
       <div class="spinner"></div>
     {:else if error}
-      <div class="empty-state"><p>Error: {error}</p></div>
+      <div class="empty-state">
+        <p>{error}</p>
+        <p><button class="retry-btn" onclick={() => void loadInitial()}>↻ Retry</button></p>
+      </div>
     {:else if loadedPages.length === 0}
       <div class="empty-state"><p>No pages found for this chapter.</p></div>
     {:else}
@@ -688,24 +785,35 @@
           </div>
         {/each}
         {#if fetchingNext}
-          <div class="loading-next"><div class="spinner"></div><span>loading next chapter…</span></div>
+          <div class="loading-next">
+            <div class="spinner"></div>
+            <span>loading next chapter{nextChapterName ? ` (${nextChapterName})` : ''}…</span>
+          </div>
         {:else if loadedPages.length > 0 && nextChapterIdAfter(loadedPages[loadedPages.length - 1].chapterId) == null}
           <!-- True end of the title — no further chapter exists in the
-               catalog at this language/country. Make the message big
-               and obvious so the user knows the reader didn't just
-               stall on a load. -->
+               catalog at this language/country. -->
           <div class="end-of-title">
             <div class="end-of-title-glyph">🏁</div>
             <h2>You've reached the end</h2>
             <p>No further chapters are available right now. New releases drop on the schedule MANGA Plus publishes — check back later.</p>
             <button class="back-to-title-btn" onclick={goBack}>Back to title page</button>
           </div>
+        {:else if nextChapterFailed}
+          <!-- Previous prefetch failed (timeout, network, server error).
+               Auto-retry is suppressed via failedChapterIds so the user
+               isn't trapped in a spinner storm; manual retry clears the
+               failure flag and re-runs maybePrefetchNext with force=true. -->
+          <div class="prefetch-error">
+            <p>Couldn't load <strong>{nextChapterName || 'the next chapter'}</strong>.</p>
+            <p class="hint">May be rate-limited or temporarily unavailable.</p>
+            <button class="retry-btn" onclick={() => void maybePrefetchNext(true)}>
+              ↻ Retry {nextChapterName || 'next chapter'}
+            </button>
+          </div>
         {:else if loadedPages.length > 0}
-          <!-- A next chapter exists but isn't loaded yet. Auto-prefetch
-               normally handles this once currentPage moves to within
-               PREFETCH_TRIGGER_DISTANCE of the end, but a hung or
-               cancelled prefetch can leave the user stuck — give them
-               a manual hatch. -->
+          <!-- Next chapter exists, no inflight, no failure: explicit
+               "Load it now" hatch for users who scrolled past the
+               PREFETCH_TRIGGER_DISTANCE without triggering auto-load. -->
           <button class="load-next-btn" onclick={() => void maybePrefetchNext(true)}>
             Load next chapter ▶
           </button>
@@ -1045,6 +1153,44 @@
   .load-next-btn:hover {
     color: var(--text);
     border-color: var(--accent);
+  }
+
+  .prefetch-error {
+    width: 100%;
+    max-width: 460px;
+    margin: 56px auto;
+    padding: 24px 28px;
+    text-align: center;
+    background: rgba(239, 83, 80, 0.08);
+    border: 1px solid rgba(239, 83, 80, 0.4);
+    border-radius: 10px;
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .prefetch-error .hint {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }
+
+  .retry-btn {
+    margin-top: 6px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+
+  .retry-btn:hover {
+    color: #fff;
+    border-color: var(--accent);
+    background: var(--accent);
   }
 
   .reader-footer {
