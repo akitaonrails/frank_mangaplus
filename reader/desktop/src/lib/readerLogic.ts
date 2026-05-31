@@ -138,6 +138,22 @@ export function findGroupContainingPage(groups: PageGroup[], pageIndex: number):
   return -1;
 }
 
+/** Find the group that contains the first page of `chapterId`, or -1
+ *  if no page in `loadedPages` belongs to that chapter. Used by the
+ *  chapter-boundary advance path: after a prefetch appends a new
+ *  chapter, scrolling to "currentGroup + 1" is unreliable because
+ *  currentGroup might have drifted during the await. Looking up the
+ *  new chapter's first group by id is stable. */
+export function firstGroupOfChapter(
+  pages: LoadedPage[],
+  groups: PageGroup[],
+  chapterId: number,
+): number {
+  const firstPageIdx = pages.findIndex(p => p.chapterId === chapterId);
+  if (firstPageIdx < 0) return -1;
+  return findGroupContainingPage(groups, firstPageIdx);
+}
+
 /**
  * Reader actions are the only side-effect operations that can be
  * triggered by a key press. Centralising the keymap here means the

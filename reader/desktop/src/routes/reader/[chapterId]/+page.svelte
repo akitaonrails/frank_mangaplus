@@ -26,6 +26,7 @@
     chapterIdAfter,
     chapterIdBefore,
     findGroupContainingPage,
+    firstGroupOfChapter,
     keyToReaderAction,
     type LoadedPage,
     type PageGroup,
@@ -500,47 +501,65 @@
   // (no more silent no-op). At the first loaded page going back, it
   // navigates to the previous chapter's URL — fresh mount, so auto-
   // advance correctly considers the new chapter's pages.
+  // Re-entrancy guard. Rapid space-bar / click-zone tapping at a chapter
+  // boundary used to queue multiple in-flight advance() calls; each
+  // continuation, when its prefetch eventually resolved, read whatever
+  // currentGroup happened to be at THAT moment (potentially shifted by
+  // the IntersectionObserver during the user's mid-wait scrolling) and
+  // jumped to `that + 1`. The user landed at random places in the new
+  // chapter. With the guard, only one advance can be active at a time.
+  let advancing = false;
+
   async function advance(direction: 'forward' | 'back', animation: 'scroll' | 'flip') {
-    if (direction === 'forward') {
-      if (currentGroup + 1 < pageGroups.length) {
-        if (animation === 'flip') void pageFlip('forward');
-        else goToGroupIndex(currentGroup + 1);
-        return;
+    if (advancing) return;
+    advancing = true;
+    try {
+      if (direction === 'forward') {
+        if (currentGroup + 1 < pageGroups.length) {
+          // Inside the loaded scroll — local move.
+          if (animation === 'flip') await pageFlip('forward');
+          else goToGroupIndex(currentGroup + 1);
+          return;
+        }
+        // At end of loaded scroll — pull next chapter and land on its
+        // first group explicitly (NOT currentGroup + 1, which can shift
+        // during the await if the IntersectionObserver re-fires).
+        const lastChIdAtCall = loadedPages[loadedPages.length - 1]?.chapterId;
+        if (lastChIdAtCall == null) return;
+        const nextChId = chapterIdAfter(allChapters, lastChIdAtCall);
+        if (nextChId == null) return; // truly end of title
+        await maybePrefetchNext(true);
+        // Flush pending bind:this for the new frames before we scroll.
+        await tick();
+        // Find the new chapter's first group by id, not by index math.
+        // Stable even if currentGroup drifted during the prefetch wait.
+        const targetGroup = firstGroupOfChapter(loadedPages, pageGroups, nextChId);
+        if (targetGroup < 0) return; // prefetch failed silently
+        // For both 'scroll' and 'flip' callers we jump cleanly to the
+        // new chapter's first page — a flip animation across an entire
+        // chapter's worth of pages would look wrong.
+        goToGroupIndex(targetGroup);
+      } else {
+        if (currentGroup > 0) {
+          if (animation === 'flip') await pageFlip('back');
+          else goToGroupIndex(currentGroup - 1);
+          return;
+        }
+        // At the start of the loaded scroll. Navigate sideways to the
+        // previous chapter rather than prepending pages — fresh mount
+        // keeps the IntersectionObserver and scroll state sane.
+        const firstChId = loadedPages[0]?.chapterId;
+        if (firstChId == null) return;
+        const prevId = chapterIdBefore(allChapters, firstChId);
+        if (prevId == null) return;
+        const qs = new URLSearchParams();
+        if (clang !== DEFAULT_CLANG) qs.set('clang', clang);
+        if (country !== DEFAULT_COUNTRY) qs.set('country', country);
+        const suffix = qs.toString();
+        goto(`/reader/${prevId}${suffix ? '?' + suffix : ''}`);
       }
-      // At end of loaded scroll — pull next chapter and then jump in.
-      const lastChId = loadedPages[loadedPages.length - 1]?.chapterId;
-      if (lastChId == null) return;
-      if (chapterIdAfter(allChapters, lastChId) == null) return; // truly end of title
-      await maybePrefetchNext(true);
-      // Wait for Svelte to flush the new pageGroups → frameEls bindings.
-      // Without this tick(), goToGroupIndex hits frameEls[N+1] before
-      // bind:this has fired on the new frame, frameEls[N+1] is undefined,
-      // and the call silently no-ops. That was the "space bar doesn't
-      // cross the chapter boundary" bug — mouse scrolling worked because
-      // it doesn't depend on frameEls.
-      await tick();
-      if (currentGroup + 1 < pageGroups.length) {
-        if (animation === 'flip') void pageFlip('forward');
-        else goToGroupIndex(currentGroup + 1);
-      }
-    } else {
-      if (currentGroup > 0) {
-        if (animation === 'flip') void pageFlip('back');
-        else goToGroupIndex(currentGroup - 1);
-        return;
-      }
-      // At the start of the loaded scroll. Navigate sideways to the
-      // previous chapter rather than trying to prepend pages — fresh
-      // mount keeps the IntersectionObserver and scroll state sane.
-      const firstChId = loadedPages[0]?.chapterId;
-      if (firstChId == null) return;
-      const prevId = chapterIdBefore(allChapters, firstChId);
-      if (prevId == null) return;
-      const qs = new URLSearchParams();
-      if (clang !== DEFAULT_CLANG) qs.set('clang', clang);
-      if (country !== DEFAULT_COUNTRY) qs.set('country', country);
-      const suffix = qs.toString();
-      goto(`/reader/${prevId}${suffix ? '?' + suffix : ''}`);
+    } finally {
+      advancing = false;
     }
   }
 

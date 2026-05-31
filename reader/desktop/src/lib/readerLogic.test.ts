@@ -5,6 +5,7 @@ import {
   chapterIdAfter,
   chapterIdBefore,
   findGroupContainingPage,
+  firstGroupOfChapter,
   keyToReaderAction,
   type LoadedPage,
 } from './readerLogic';
@@ -176,6 +177,50 @@ describe('findGroupContainingPage', () => {
     const groups = buildPageGroups([page(1), page(1)], 'single');
     expect(findGroupContainingPage(groups, 5)).toBe(-1);
     expect(findGroupContainingPage([], 0)).toBe(-1);
+  });
+});
+
+describe('firstGroupOfChapter', () => {
+  // Simulating: chapter 100 (3 pages), then chapter 200 (2 pages),
+  // then chapter 300 (4 pages).
+  const pages = [
+    page(100), page(100), page(100),
+    page(200), page(200),
+    page(300), page(300), page(300), page(300),
+  ];
+
+  it('finds the group containing each chapter\'s first page in single mode', () => {
+    const groups = buildPageGroups(pages, 'single');
+    expect(firstGroupOfChapter(pages, groups, 100)).toBe(0); // page idx 0
+    expect(firstGroupOfChapter(pages, groups, 200)).toBe(3); // page idx 3
+    expect(firstGroupOfChapter(pages, groups, 300)).toBe(5); // page idx 5
+  });
+
+  it('finds the right group in double mode (pairs never cross chapter boundary)', () => {
+    const groups = buildPageGroups(pages, 'double');
+    // groups: [c100 p1,p2], [c100 p3 solo], [c200 p1,p2], [c300 p1,p2], [c300 p3,p4]
+    expect(firstGroupOfChapter(pages, groups, 100)).toBe(0);
+    expect(firstGroupOfChapter(pages, groups, 200)).toBe(2); // after the c100 leftover solo
+    expect(firstGroupOfChapter(pages, groups, 300)).toBe(3);
+  });
+
+  it('returns -1 when the chapter id has no pages loaded', () => {
+    const groups = buildPageGroups(pages, 'single');
+    expect(firstGroupOfChapter(pages, groups, 999)).toBe(-1);
+    expect(firstGroupOfChapter([], [], 100)).toBe(-1);
+  });
+
+  it('regression: advance() at boundary uses firstGroupOfChapter for the post-prefetch jump', () => {
+    // Scenario from the user report: chapter N (108 pages) reaches end,
+    // chapter N+1 (43 pages) is appended. The user lands on page 1 of
+    // N+1 — group index = N's group count, not "stale currentGroup + 1".
+    const pagesN  = Array.from({ length: 108 }, () => page(1));
+    const pagesN1 = Array.from({ length:  43 }, () => page(2));
+    const all = [...pagesN, ...pagesN1];
+    const groups = buildPageGroups(all, 'single');
+    // In single mode, every page is its own group, so chapter N+1's
+    // first group is at index 108 (right after N's 108 groups).
+    expect(firstGroupOfChapter(all, groups, 2)).toBe(108);
   });
 });
 
