@@ -14,9 +14,12 @@
     getEyeFilter,
     setEyeFilter,
     nextEyeFilter,
+    getHelpSeen,
+    setHelpSeen,
     type PageMode,
     type EyeFilter,
   } from '$lib/readState';
+  import HelpModal from '$lib/HelpModal.svelte';
   import {
     buildPageGroups,
     scanChapterBounds,
@@ -130,6 +133,19 @@
   // persisted, also survives reloads.
   let eyeFilter: EyeFilter = $state('off');
 
+  // Help modal: open state controlled here, persistence ("seen once,
+  // don't auto-open again") delegated to readState's getHelpSeen /
+  // setHelpSeen helpers. First-launch opens it from loadInitial when
+  // helpSeen is false.
+  let helpOpen = $state(false);
+  function openHelp() {
+    helpOpen = true;
+    setHelpSeen(true);
+  }
+  function closeHelp() {
+    helpOpen = false;
+  }
+
   // Pages bundled into render frames. See lib/readerLogic.ts for the
   // pure grouping logic + its unit tests.
   let pageGroups: PageGroup[] = $derived(buildPageGroups(loadedPages, pageMode));
@@ -202,6 +218,12 @@
       allChapters = [...(v.chapters ?? [])].sort((a, b) => a.chapterId - b.chapterId);
       appendChapter(v);
       if (v.titleId && v.chapterId) markChapterRead(v.titleId, v.chapterId);
+
+      // First-time-user help: surface the keymap once on the very first
+      // chapter the user opens. setHelpSeen latches it so this doesn't
+      // re-appear; the "?" key and the header help button can still
+      // re-open it on demand.
+      if (!getHelpSeen()) openHelp();
 
       // Kick off title_detail in the background to get the authoritative
       // chapter list. Doesn't block the user seeing the first pages.
@@ -534,6 +556,10 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    // When the help modal is open it owns the keyboard. Its own
+    // svelte:window handler closes on Escape / "?"; everything else
+    // should be a no-op so the reader doesn't navigate underneath.
+    if (helpOpen) return;
     const action = keyToReaderAction(e.key);
     if (action == null) return; // unbound, let the browser handle it
     e.preventDefault();
@@ -546,6 +572,7 @@
       case 'jump-chapter-end':       jumpToChapterEdge('end');   break;
       case 'toggle-page-mode':       togglePageMode(); break;
       case 'toggle-eye-filter':      toggleEyeFilter(); break;
+      case 'open-help':              openHelp(); break;
       case 'go-back':                goBack(); break;
     }
   }
@@ -636,6 +663,21 @@
           {eyeFilter === 'low' ? '·' : eyeFilter === 'med' ? '··' : '···'}
         </span>
       {/if}
+    </button>
+
+    <!-- Help button: opens the keymap modal. Also auto-opens on the
+         user's very first chapter (see openHelp in onMount path). -->
+    <button
+      class="help-toggle"
+      onclick={openHelp}
+      title="Show keyboard shortcuts (press ?)"
+      aria-label="Show keyboard shortcuts"
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="12" cy="16.5" r="1" fill="currentColor"/>
+      </svg>
     </button>
 
     <span class="page-indicator">
@@ -769,6 +811,8 @@
   {/if}
 </div>
 
+<HelpModal open={helpOpen} onclose={closeHelp} />
+
 <style>
   .reader {
     display: flex;
@@ -884,6 +928,22 @@
     line-height: 1;
     letter-spacing: -0.05em;
     margin-bottom: 2px;
+  }
+
+  .help-toggle {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 4px 6px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
+  }
+  .help-toggle:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
   }
 
   .page-indicator {

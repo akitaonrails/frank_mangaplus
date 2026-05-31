@@ -132,3 +132,15 @@ export function nextEyeFilter(level: EyeFilter): EyeFilter {
   const i = EYE_FILTER_VALUES.indexOf(level);
   return EYE_FILTER_VALUES[(i + 1) % EYE_FILTER_VALUES.length];
 }
+
+// Tracks whether the user has already seen the reader help modal once.
+// The first time they open a chapter, the modal auto-opens to surface
+// the keybindings + click-zone explanation; after that it only opens
+// on explicit "?" key or button click.
+const KEY_HELP_SEEN = 'mp:helpSeen';
+export function getHelpSeen(): boolean {
+  return localStorage.getItem(KEY_HELP_SEEN) === '1';
+}
+export function setHelpSeen(seen: boolean) {
+  localStorage.setItem(KEY_HELP_SEEN, seen ? '1' : '0');
+}

@@ -14,6 +14,8 @@ import {
   getEyeFilter,
   setEyeFilter,
   nextEyeFilter,
+  getHelpSeen,
+  setHelpSeen,
 } from './readState';
 
 // Minimal in-memory localStorage shim — vitest's jsdom-less default doesn't
@@ -148,5 +150,13 @@ describe('readState', () => {
     expect(nextEyeFilter('low')).toBe('med');
     expect(nextEyeFilter('med')).toBe('high');
     expect(nextEyeFilter('high')).toBe('off');
+  });
+
+  it('helpSeen defaults to false on a fresh install and round-trips', () => {
+    expect(getHelpSeen()).toBe(false);
+    setHelpSeen(true);
+    expect(getHelpSeen()).toBe(true);
+    setHelpSeen(false);
+    expect(getHelpSeen()).toBe(false);
   });
 });

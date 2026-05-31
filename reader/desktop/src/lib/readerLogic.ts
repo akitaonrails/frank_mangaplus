@@ -163,6 +163,7 @@ export type ReaderAction =
   | 'jump-chapter-end'
   | 'toggle-page-mode'
   | 'toggle-eye-filter'
+  | 'open-help'
   | 'go-back';
 
 const KEY_MAP: Record<string, ReaderAction> = {
@@ -181,6 +182,7 @@ const KEY_MAP: Record<string, ReaderAction> = {
   D:          'toggle-page-mode',
   f:          'toggle-eye-filter',
   F:          'toggle-eye-filter',
+  '?':        'open-help',
   Escape:     'go-back',
 };
 

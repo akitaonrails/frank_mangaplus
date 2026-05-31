@@ -200,6 +200,10 @@ describe('keyToReaderAction', () => {
     expect(keyToReaderAction('End')).toBe('jump-chapter-end');
   });
 
+  it('maps "?" to the help modal', () => {
+    expect(keyToReaderAction('?')).toBe('open-help');
+  });
+
   it('maps the toggles + escape', () => {
     expect(keyToReaderAction('d')).toBe('toggle-page-mode');
     expect(keyToReaderAction('D')).toBe('toggle-page-mode');
