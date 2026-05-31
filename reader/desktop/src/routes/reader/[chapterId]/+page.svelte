@@ -522,6 +522,17 @@
     }
   }
 
+  /** Jump to the first or last page of the chapter the user is reading.
+   *  Uses the already-computed chapter bounds, then finds the group
+   *  that contains that edge page — works in every layout mode. */
+  function jumpToChapterEdge(edge: 'start' | 'end') {
+    const targetPage = edge === 'start'
+      ? currentChapterFirstIndex
+      : currentChapterFirstIndex + chapterPageCount - 1;
+    const targetGroup = findGroupContainingPage(pageGroups, targetPage);
+    if (targetGroup >= 0) goToGroupIndex(targetGroup);
+  }
+
   function onKey(e: KeyboardEvent) {
     const action = keyToReaderAction(e.key);
     if (action == null) return; // unbound, let the browser handle it
@@ -531,6 +542,8 @@
       case 'advance-back-scroll':    void advance('back',    'scroll'); break;
       case 'advance-forward-flip':   void advance('forward', 'flip');   break;
       case 'advance-back-flip':      void advance('back',    'flip');   break;
+      case 'jump-chapter-start':     jumpToChapterEdge('start'); break;
+      case 'jump-chapter-end':       jumpToChapterEdge('end');   break;
       case 'toggle-page-mode':       togglePageMode(); break;
       case 'toggle-eye-filter':      toggleEyeFilter(); break;
       case 'go-back':                goBack(); break;

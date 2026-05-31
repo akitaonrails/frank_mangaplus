@@ -148,6 +148,8 @@ export function findGroupContainingPage(groups: PageGroup[], pageIndex: number):
  *   advanceBackScroll     — vertical scroll keys reversed (ArrowUp, k, PageUp)
  *   advanceForwardFlip    — manga-RTL keys (ArrowLeft) — page-flip animation
  *   advanceBackFlip       — manga-RTL keys (ArrowRight)
+ *   jumpChapterStart      — Home, jumps to the first page of the current chapter
+ *   jumpChapterEnd        — End, jumps to the last page of the current chapter
  *   togglePageMode        — D
  *   toggleEyeFilter       — F
  *   goBack                — Escape
@@ -157,6 +159,8 @@ export type ReaderAction =
   | 'advance-back-scroll'
   | 'advance-forward-flip'
   | 'advance-back-flip'
+  | 'jump-chapter-start'
+  | 'jump-chapter-end'
   | 'toggle-page-mode'
   | 'toggle-eye-filter'
   | 'go-back';
@@ -171,6 +175,8 @@ const KEY_MAP: Record<string, ReaderAction> = {
   PageUp:     'advance-back-scroll',
   ArrowLeft:  'advance-forward-flip',
   ArrowRight: 'advance-back-flip',
+  Home:       'jump-chapter-start',
+  End:        'jump-chapter-end',
   d:          'toggle-page-mode',
   D:          'toggle-page-mode',
   f:          'toggle-eye-filter',

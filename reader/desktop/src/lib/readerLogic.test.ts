@@ -195,6 +195,11 @@ describe('keyToReaderAction', () => {
     expect(keyToReaderAction('ArrowRight')).toBe('advance-back-flip');
   });
 
+  it('maps Home/End to chapter-jump actions', () => {
+    expect(keyToReaderAction('Home')).toBe('jump-chapter-start');
+    expect(keyToReaderAction('End')).toBe('jump-chapter-end');
+  });
+
   it('maps the toggles + escape', () => {
     expect(keyToReaderAction('d')).toBe('toggle-page-mode');
     expect(keyToReaderAction('D')).toBe('toggle-page-mode');
