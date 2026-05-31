@@ -15,6 +15,8 @@
     ·
     <a href="docs/android-secret.md">Get your secret</a>
     ·
+    <a href="docs/troubleshooting.md">Troubleshooting</a>
+    ·
     <a href="docs/debugging.md">Contributors</a>
   </p>
 
@@ -89,7 +91,7 @@ Grab the build for your OS from the [Releases page](https://github.com/akitaonra
 | macOS (Intel) | `FRANK.MANGA+_*_x64.dmg` |
 | Windows | `FRANK.MANGA+_*_x64-setup.exe` |
 
-Long-form install doc: [docs/install.md](docs/install.md).
+Long-form install doc: [docs/install.md](docs/install.md). Hitting a blank screen on Linux? See [docs/troubleshooting.md](docs/troubleshooting.md) — the binary auto-recovers from EGL crashes on the second launch and there are render-mode overrides for stubborn cases.
 
 On first launch the app calls the official `/register` endpoint and is issued a fresh free-tier `deviceSecret`. That gets saved locally and you're reading the catalog. If you're a paid subscriber and want subscription chapters too, open Settings and paste your phone-extracted `deviceSecret` to upgrade.
 
@@ -135,6 +137,7 @@ If you don't trust a random binary on the internet to do that honestly (you shou
 
 - [`docs/install.md`](docs/install.md): end-user install. Free-tier auto-register and the optional subscriber upgrade.
 - [`docs/android-secret.md`](docs/android-secret.md): the rooted-AVD walkthrough for extracting a subscriber `deviceSecret`. Doesn't touch your phone.
+- [`docs/troubleshooting.md`](docs/troubleshooting.md): blank screen on Linux, render-mode overrides, WebKitGTK crash workarounds, and how the auto-recovery handles all of that for you.
 - [`docs/debugging.md`](docs/debugging.md): contributor notes. mitmproxy, Frida, the real headers, what tripped me up.
 
 ## Disclaimer
