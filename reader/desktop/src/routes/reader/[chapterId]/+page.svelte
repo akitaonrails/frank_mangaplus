@@ -46,11 +46,14 @@
     return out;
   }
 
-  // Start fetching the next chapter when the user is this close (in
-  // currently-loaded pages) to the end of the loaded scroll. Tuned to
-  // overlap the network round-trip with the last couple of pages so the
-  // join is invisible.
-  const PREFETCH_TRIGGER_DISTANCE = 2;
+  // Start fetching the next chapter when the user is this many pages
+  // from the end of the loaded scroll. Tuned to overlap the network
+  // round-trip with several pages of reading time so the join is
+  // invisible even on slower API responses or when the user reads
+  // fast. The earlier this fires, the higher the chance the next
+  // chapter is already loaded when the user crosses the boundary —
+  // which avoids the "wait for spinner at end of chapter" experience.
+  const PREFETCH_TRIGGER_DISTANCE = 5;
 
   // The reader inherits locale from the title page via URL params.
   // Defaults apply when navigating to a chapter URL directly.
