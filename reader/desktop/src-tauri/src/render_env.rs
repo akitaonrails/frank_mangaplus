@@ -27,10 +27,6 @@
 //! thread. The unsafe blocks below are sound under that invariant.
 
 #![cfg(target_os = "linux")]
-// dead_code is suppressed at the module level only until the next
-// commit wires apply_mode + decide_mode into run(). Tests already
-// exercise everything here.
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
@@ -239,14 +235,6 @@ pub fn detect_display_server_from_env() -> DisplayServer {
     } else {
         DisplayServer::Unknown
     }
-}
-
-/// Honour `MANGAPLUS_RENDER_MODE` env var if it's set to a valid slug.
-/// Anything else (unset, empty, garbage) → None.
-pub fn override_from_env() -> Option<ModeOverride> {
-    std::env::var("MANGAPLUS_RENDER_MODE")
-        .ok()
-        .and_then(|s| parse_mode_override(&s))
 }
 
 /// Parse a `key=value` config file body for a `mode = ...` entry.

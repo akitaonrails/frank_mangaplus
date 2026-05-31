@@ -55,6 +55,20 @@ fn acknowledge_free_tier() -> Result<(), String> {
     Ok(())
 }
 
+/// Frontend handshake — called from the SvelteKit layout on first
+/// successful render. Clears the recovery marker that was touched at
+/// startup; if the WebView aborts before this fires, the marker stays
+/// behind and the NEXT launch reads it as "previous run died" → falls
+/// back to Safe rendering automatically. See render_env.rs for the
+/// full policy.
+#[tauri::command]
+fn mark_app_ready() {
+    #[cfg(target_os = "linux")]
+    {
+        render_env::clear_recovery_marker(&config_dir());
+    }
+}
+
 #[tauri::command]
 async fn set_secret(
     state: tauri::State<'_, AppState>,
@@ -340,35 +354,68 @@ async fn get_chapter_pages(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // WebKitGTK has two EGL initialisation paths that can fail on
-    // Wayland desktops:
+    // Linux-only: pick a WebKit render mode based on the actual
+    // hardware + display server, instead of unconditionally forcing
+    // CPU rendering on every user. Replaces the always-on
+    // WEBKIT_DISABLE_COMPOSITING_MODE hammer.
     //
-    //   1. The GBM/DMABUF renderer aborts with "Could not create GBM
-    //      EGL display: EGL_SUCCESS. Aborting..." on lots of
-    //      Wayland+Mesa combos.
-    //   2. The SHM (software-mapped) fallback aborts with "Could not
-    //      create default EGL display: EGL_BAD_PARAMETER. Aborting..."
-    //      on some setups — reported live on Bazzite with AMD Lucienne
-    //      under KWin Wayland.
+    // Order of precedence (highest first):
+    //   1. MANGAPLUS_RENDER_MODE env var
+    //   2. <config_dir>/render.conf `mode = ...`
+    //   3. Crash recovery (last run left a marker behind) → Safe
+    //   4. Auto detect from GPU vendor + WAYLAND_DISPLAY
     //
-    // Disabling BOTH paths via the two env vars below pushes WebKit
-    // into a fully CPU-side compositing mode. The performance hit for a
-    // mostly-static manga reader is negligible — the page-flip animation
-    // and CSS sepia filter still feel fine without GPU compositing.
-    //
-    // Each var is only set if the user hasn't already set it themselves,
-    // so they can opt back in on systems where the hardware path works.
+    // Whatever's decided gets written to <config_dir>/render-state.log
+    // so users can `cat` it and see exactly what was applied. See
+    // docs/troubleshooting.md for the full matrix.
     #[cfg(target_os = "linux")]
     {
-        // SAFETY: nothing has spawned a thread yet, so no concurrent
-        // reader of the env table exists. Required because
-        // `std::env::set_var` is unsafe as of Rust 1.85.
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-            unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
-        }
-        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
-            unsafe { std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1") };
-        }
+        use render_env::{
+            apply_mode, decide_mode, detect_display_server_from_env,
+            detect_gpu_vendor_from_sysfs, is_recovery_needed,
+            create_recovery_marker, resolve_user_override, write_state_log,
+            ModeOverride,
+        };
+        let cfg_dir = config_dir();
+        let env_override = std::env::var("MANGAPLUS_RENDER_MODE").ok();
+        let user_override = resolve_user_override(env_override.as_deref(), &cfg_dir);
+        let recovery = is_recovery_needed(&cfg_dir);
+        let explicit = match user_override {
+            Some(ModeOverride::Explicit(m)) => Some(m),
+            // ModeOverride::Auto is the same as "no override" — fall
+            // through to crash-recovery / auto-detect.
+            _ => None,
+        };
+        let display = detect_display_server_from_env();
+        let gpu = detect_gpu_vendor_from_sysfs();
+        let (mode, reason) = decide_mode(explicit, recovery, display, gpu);
+        eprintln!(
+            "[mangaplus-reader] render mode: {} ({}; display={:?} gpu={:?}{}{})",
+            mode.slug(),
+            reason,
+            display,
+            gpu,
+            if user_override.is_some() { " override=yes" } else { "" },
+            if recovery { " recovery=yes" } else { "" },
+        );
+        // SAFETY: this is the binary's first user-code call after main;
+        // nothing has spawned a thread yet, so the env table has no
+        // concurrent reader.
+        unsafe { apply_mode(mode) };
+        // Touch the recovery marker. If the frontend signals app-ready
+        // before exit, we clear it via the mark_app_ready command. If
+        // we crash mid-render, it stays — the next launch sees it and
+        // falls back to Safe mode automatically.
+        create_recovery_marker(&cfg_dir);
+        write_state_log(
+            &cfg_dir,
+            mode,
+            reason,
+            display,
+            gpu,
+            user_override.is_some(),
+            recovery,
+        );
     }
 
     let mut secret = read_secret();
@@ -442,6 +489,7 @@ pub fn run() {
             is_configured,
             is_auto_registered,
             acknowledge_free_tier,
+            mark_app_ready,
             set_secret,
             get_profile,
             get_favorites,
