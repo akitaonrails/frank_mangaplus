@@ -1062,14 +1062,23 @@
     align-items: center;
   }
 
-  /* Eye-protection sepia filter levels. CSS `filter: sepia()` shifts the
-     hue toward amber while preserving the luminance range (contrast stays
-     intact). brightness/saturate dial in the night-reading warmth. The
-     filter goes on the whole page-stack so background art, gutters, and
-     speech-bubble whites all warm together. */
-  .page-stack.eye-low  { filter: sepia(0.25) brightness(0.97); }
-  .page-stack.eye-med  { filter: sepia(0.50) brightness(0.90) saturate(0.85); }
-  .page-stack.eye-high { filter: sepia(0.75) brightness(0.82) saturate(0.70); }
+  /* Eye-protection sepia filter levels.
+   *
+   * Applied per .manga-page (not on the whole .page-stack) for perf:
+   * with the filter on the stack and v0.7.6's WEBKIT_DISABLE_COMPOSITING_MODE,
+   * the page-flip transform forced the browser to re-rasterise the entire
+   * scroll content on CPU each frame. Per-image filtering caches the
+   * filtered output on each img independently — transforms on .page-stack
+   * just move already-filtered surfaces around. Visible sluggishness on
+   * the page-flip animation goes away.
+   *
+   * Visually identical: sepia + brightness + saturate compose the same
+   * way whether applied once to the stack or N times to the images,
+   * because every manga page is opaque (the filter never has to blend
+   * gutters between images differently from the images themselves). */
+  .page-stack.eye-low  .manga-page { filter: sepia(0.25) brightness(0.97); }
+  .page-stack.eye-med  .manga-page { filter: sepia(0.50) brightness(0.90) saturate(0.85); }
+  .page-stack.eye-high .manga-page { filter: sepia(0.75) brightness(0.82) saturate(0.70); }
 
   .page-frame {
     /* Size to the contained image — no fixed viewport-height frame.
