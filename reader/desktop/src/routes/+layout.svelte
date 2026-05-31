@@ -1,5 +1,7 @@
 <script lang="ts">
   import '../app.css';
+  import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { page } from '$app/stores';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SecretSetup from '$lib/SecretSetup.svelte';
@@ -16,6 +18,18 @@
     // Route through Tauri so the WebView doesn't try to navigate.
     void openUrl(REPO_URL);
   }
+
+  // Crash-recovery handshake. The Rust side touched a marker file at
+  // startup; once we get here, the WebView is rendering (we wouldn't
+  // be running otherwise), so clear the marker. If the WebView aborts
+  // before this fires — typically because of EGL_BAD_PARAMETER or a
+  // similar Wayland/EGL issue — the marker stays and the NEXT launch
+  // falls back to safe rendering automatically.
+  onMount(() => {
+    void invoke('mark_app_ready').catch((e) => {
+      console.warn('mark_app_ready failed:', e);
+    });
+  });
 </script>
 
 <SecretSetup />
