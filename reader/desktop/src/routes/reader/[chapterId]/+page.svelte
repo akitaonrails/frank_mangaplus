@@ -1153,22 +1153,22 @@
     pointer-events: none; /* clicks go through to the zones below */
   }
 
-  .page-frame.is-pair .manga-page {
-    /* Each image in a pair shares the available width. */
-    max-width: 50%;
-  }
-
   /* Per-image wrapper holds the <img> and the retry-overlay button
      together so the overlay is positioned relative to its own image,
      not the whole frame (important in double-pair mode where one of
-     two images may have failed). */
+     two images may have failed).
+     Keep it as a plain `display: block` — no flex of its own. Earlier
+     versions had `display: flex` here, and `.page-frame.is-pair
+     .manga-page { max-width: 50% }`. The combination capped the img
+     at 50% of the wrapper (which is 50% of the frame), so each image
+     rendered at 25% width, frames were too short to fill the
+     viewport, and scroll-snap stopped settling — multiple pairs
+     showed up at once. Now: wrapper caps to 50% of frame in pair
+     mode, img inside is `max-width: 100%` (already set on .manga-page
+     below), and the layout matches a v0.7.x reader. */
   .page-image-wrapper {
     position: relative;
-    display: flex;
-    align-items: stretch;
-    justify-content: center;
-    /* In a flex pair, each wrapper shrinks to its image's intrinsic
-       width up to the 50% cap from the page-frame.is-pair rule. */
+    display: block;
   }
   .page-frame.is-pair .page-image-wrapper {
     max-width: 50%;
