@@ -90,8 +90,12 @@ message SubscribedTitlesView {
 
 // Source: SearchViewOuterClass.java.
 // TOP_SEARCH_BANNERS=1, ALL_TAGS=2, ALL_TITLES_GROUP=3, CONTENTS=5, ALL_LABELS=6.
-// Only contents(5) is exposed; the client filters titles by query locally.
+// Two distinct populations depending on which endpoint produced it.
+// /title_list/search → `contents` populated, `all_titles_group` empty.
+// /title_list/all_v3 → `all_titles_group` populated, `contents` empty.
+// One type covers both so the extract path stays shared.
 message SearchView {
+  repeated AllTitlesGroup all_titles_group = 3;
   repeated SearchContents contents = 5;
 }
 
@@ -107,6 +111,14 @@ message SearchContents {
 message TitleList {
   string         list_name       = 1;
   repeated Title featured_titles = 2;
+}
+
+// Source: TitleListGroup.java inner class AllTitlesGroup.
+// THE_TITLE=1, TITLES=2, TAGS=3, LABEL=4, NEXT_CHAPTER_START_TIMESTAMP=5,
+// LABEL_V2=6. We only need `titles` — the rest is UI chrome for the
+// official app's grouped view that we don't replicate.
+message AllTitlesGroup {
+  repeated Title titles = 2;
 }
 
 // Source: TitleDetailViewOuterClass.java.

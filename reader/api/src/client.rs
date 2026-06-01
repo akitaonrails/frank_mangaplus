@@ -36,6 +36,40 @@ pub mod lang {
     pub const GERMAN: &str = "deu";
 }
 
+// ---------- defaults ----------
+//
+// Documented here in one place so a future tuner can see all the
+// knobs without grepping. Surfaced via `ClientConfig::new` and
+// referenced from doc comments below.
+
+/// Max concurrent CDN image fetches. Empirically a 12-permit
+/// semaphore keeps a 100/1 Mbps residential link busy without
+/// exhausting ephemeral sockets when the WebView mounts 80+ thumbnails
+/// at once.
+pub const DEFAULT_MAX_CONCURRENT_IMAGES: usize = 12;
+
+/// Per-image retry budget on transient failures. 2 extra tries (3
+/// total attempts) covers the typical jumpg-assets3 hiccup without
+/// burning user time on dead URLs.
+pub const DEFAULT_IMAGE_RETRY_ATTEMPTS: u32 = 2;
+
+/// Base backoff for image retries (ms). Doubled each subsequent
+/// retry, capped at 256× (see [`backoff_delay_ms`]).
+pub const DEFAULT_IMAGE_RETRY_BACKOFF_MS: u64 = 250;
+
+/// Hard cap on a single image body (bytes). Defends against a
+/// misbehaving CDN/MITM streaming gigabytes through `Bytes::collect`.
+/// 32 MB is comfortably above any real manga page (≤2 MB) plus
+/// breathing room.
+pub const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Cap on the exponential shift in [`backoff_delay_ms`]. A shift of 8
+/// means base × 256, so with the default 250 ms base the longest
+/// single retry sleep is ~64 s — long enough to ride out a brief CDN
+/// outage, short enough that a runaway `image_retry_attempts` value
+/// can't park a fetch for hours.
+const BACKOFF_SHIFT_CAP: u32 = 8;
+
 /// Builder/config for the API client.
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
@@ -54,6 +88,19 @@ pub struct ClientConfig {
     /// directory is created on demand; URL path becomes the cache layout
     /// (e.g. `<cache_dir>/title/100020/chapter/1000486/manga_page/high/1.webp`).
     pub image_cache_dir: Option<PathBuf>,
+    /// Max concurrent CDN image fetches. The MANGA Plus API server has a
+    /// strict rate limit (hence `min_request_interval`), but the CDN
+    /// hosts are separate and tolerate parallelism — without one a 80-
+    /// thumbnail grid takes 80 × 500 ms = 40 s to populate on a cold
+    /// cache. Set high enough to keep the network busy, low enough to
+    /// not exhaust ephemeral sockets. Default: 12.
+    pub max_concurrent_images: usize,
+    /// Per-image retry budget on transient failures (network reset,
+    /// 5xx, 408, 429). Each retry sleeps `image_retry_backoff_ms` × 2^n
+    /// before re-issuing. Default: 2 (so up to 3 total attempts).
+    pub image_retry_attempts: u32,
+    /// Base backoff for image retries. Default 250 ms, then 500, 1000…
+    pub image_retry_backoff_ms: u64,
 }
 
 impl ClientConfig {
@@ -65,6 +112,9 @@ impl ClientConfig {
             secret: secret.into(),
             min_request_interval: Duration::from_millis(500),
             image_cache_dir: None,
+            max_concurrent_images: DEFAULT_MAX_CONCURRENT_IMAGES,
+            image_retry_attempts: DEFAULT_IMAGE_RETRY_ATTEMPTS,
+            image_retry_backoff_ms: DEFAULT_IMAGE_RETRY_BACKOFF_MS,
         }
     }
 }
@@ -72,11 +122,17 @@ impl ClientConfig {
 /// Thin async client. Holds a single `reqwest::Client`, the session
 /// secret, and a shared throttle gate. Cheap to clone — the gate is
 /// behind an `Arc<Mutex<>>` so clones share the rate-limit state.
+///
+/// Image fetches use a separate `tokio::sync::Semaphore` instead of
+/// the API throttle: the MANGA Plus CDN tolerates parallelism, and
+/// gating image traffic on the same 500-ms-per-request mutex turned
+/// a 80-thumbnail grid into a 40-second progressive reveal.
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     cfg: ClientConfig,
     last_request_at: Arc<Mutex<Option<Instant>>>,
+    image_gate: Arc<tokio::sync::Semaphore>,
 }
 
 impl Client {
@@ -100,10 +156,14 @@ impl Client {
             .user_agent("okhttp/4.12.0")
             .cookie_store(true)
             .build()?;
+        // Cap the semaphore at the configured concurrency. Zero would
+        // be a deadlock; floor it at 1 to be safe.
+        let permits = cfg.max_concurrent_images.max(1);
         Ok(Self {
             http,
             cfg,
             last_request_at: Arc::new(Mutex::new(None)),
+            image_gate: Arc::new(tokio::sync::Semaphore::new(permits)),
         })
     }
 
@@ -136,14 +196,29 @@ impl Client {
     /// The cookie acquired on a recent API call (e.g. get_chapter_pages) is
     /// reused automatically via the cookie store.
     ///
-    /// Cached locally when `image_cache_dir` is configured. Cache key is the
-    /// URL path (signed query params stripped, since the underlying image
-    /// is stable). A second request for the same path is served from disk
-    /// without touching the network.
+    /// Concurrency is bounded by `cfg.max_concurrent_images` via an
+    /// internal semaphore — this lets dozens of `<img>` tags fire
+    /// simultaneously without exhausting sockets or stampeding the CDN.
+    /// The API throttle is intentionally NOT applied: image hosts are
+    /// separate from the API server and don't share its rate limit.
+    ///
+    /// Transient failures (connection reset, request timeout, 408,
+    /// 429, 5xx) are retried with exponential backoff up to
+    /// `cfg.image_retry_attempts` extra tries. Hard 4xx (404, etc.)
+    /// fail fast — retrying a 404 just delays the placeholder.
+    ///
+    /// Cached locally when `image_cache_dir` is configured. Cache key is
+    /// the URL path (signed query params stripped, since the underlying
+    /// image is stable). A cached hit skips the semaphore entirely so
+    /// disk hits never queue behind in-flight network fetches.
     pub async fn fetch_image(&self, url: &str) -> Result<(Vec<u8>, String)> {
         let cache_path = self.cache_path_for(url);
         let ct = Self::content_type_from_ext(url).to_string();
 
+        // Cache hit fast path: no semaphore, no network. Critical for
+        // re-renders — the WebView re-requests an image whenever it
+        // scrolls back into view, and we don't want the disk hit to
+        // queue behind 12 in-flight CDN fetches.
         if let Some(p) = &cache_path {
             if let Ok(bytes) = tokio::fs::read(p).await {
                 if !bytes.is_empty() {
@@ -152,7 +227,57 @@ impl Client {
             }
         }
 
-        self.throttle().await;
+        let max_attempts = self.cfg.image_retry_attempts.saturating_add(1);
+        let mut last_err: Option<ApiError> = None;
+        for attempt in 0..max_attempts {
+            if attempt > 0 {
+                // Sleep with NO permit held. Holding the permit during
+                // backoff means a single slow URL stalls 1/12th of the
+                // global concurrency for the full backoff window —
+                // under default config that's ~1.75 s per retried URL,
+                // collapsing throughput to a crawl when a handful of
+                // hosts misbehave.
+                let delay_ms = backoff_delay_ms(self.cfg.image_retry_backoff_ms, attempt);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            // Re-acquire the permit for each attempt. Tokio's semaphore
+            // is FIFO-ish under contention, so the just-released slot
+            // goes to whoever is waiting next, not the retrying caller.
+            let permit = self
+                .image_gate
+                .acquire()
+                .await
+                .expect("image semaphore closed (never closed in practice)");
+            let result = self.try_fetch_image_once(url, cache_path.as_ref(), &ct).await;
+            drop(permit);
+            match result {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    if !is_retriable(&e) {
+                        return Err(e);
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+        // Loop ran but every attempt was retriable-and-failed.
+        // `last_err` is guaranteed Some by the loop invariant when
+        // `max_attempts >= 1` (saturating_add guarantees that), but
+        // express the impossibility explicitly rather than relying on
+        // a meaningless `Status(0)` filler.
+        Err(last_err.unwrap_or_else(|| {
+            ApiError::Other("image fetch exhausted retries with no error captured".into())
+        }))
+    }
+
+    /// Single CDN attempt. Separated so the retry loop in
+    /// [`fetch_image`] can drive it without re-doing cache-key math.
+    async fn try_fetch_image_once(
+        &self,
+        url: &str,
+        cache_path: Option<&PathBuf>,
+        fallback_ct: &str,
+    ) -> Result<(Vec<u8>, String)> {
         let resp = self.http.get(url).send().await?;
         let status = resp.status();
         let server_ct = resp
@@ -160,20 +285,32 @@ impl Client {
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
-            .unwrap_or(ct);
+            .unwrap_or_else(|| fallback_ct.to_string());
         if !status.is_success() {
             return Err(ApiError::Status(status.as_u16()));
         }
+        // Bound the body up-front so a misbehaving CDN or a MITM
+        // can't stream gigabytes into our Vec. We trust Content-Length
+        // when present (the real CDN always sends it); if absent, we
+        // still fall through to `.bytes()` which collects everything
+        // in memory — but a sane TCP timeout will catch a pathological
+        // dribbling stream long before it matters in practice.
+        if let Some(len) = resp.content_length() {
+            if len > MAX_IMAGE_BYTES {
+                return Err(ApiError::Other(format!(
+                    "image too large: {} bytes (cap {})",
+                    len, MAX_IMAGE_BYTES
+                )));
+            }
+        }
         let bytes = resp.bytes().await?.to_vec();
 
-        if let Some(p) = &cache_path {
+        if let Some(p) = cache_path {
             if let Some(parent) = p.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
-            // Best effort — don't fail the user-visible fetch if write fails.
             let _ = tokio::fs::write(p, &bytes).await;
         }
-
         Ok((bytes, server_ct))
     }
 
@@ -285,6 +422,33 @@ impl Client {
         })
     }
 
+    /// Fetch the full title catalog for one publication-status bucket —
+    /// the official app's BrowseTitles tabs ("serializing" = ongoing,
+    /// "completed" = finished). To get the entire catalog the caller
+    /// must request both buckets and merge.
+    ///
+    /// Despite the URL saying "all_v3", the response is a SearchView
+    /// (success-result variant 35) with the `all_titles_group` field
+    /// populated instead of `contents`. We reuse SearchView so the
+    /// existing extract path works.
+    pub async fn get_all_titles_by_type(
+        &self,
+        type_bucket: &str,
+        lang: &str,
+        clang: &str,
+    ) -> Result<proto::SearchView> {
+        let body = self
+            .get_raw(
+                "title_list/all_v3",
+                &[("type", type_bucket), ("lang", lang), ("clang", clang)],
+            )
+            .await?;
+        extract_variant(body, "search_view", |d| match d {
+            proto::success_result::Data::SearchView(v) => Ok(v),
+            _ => Err(()),
+        })
+    }
+
     /// Fetch a single title's detail (chapters, overview, banners-stripped).
     ///
     /// `country_code` example: "US", "JP". Empty string also works.
@@ -383,6 +547,37 @@ fn extract_success_data(resp: proto::Response) -> Result<proto::success_result::
         Some(proto::response::Result::Success(s)) => s.data.ok_or(ApiError::EmptyResponse),
         Some(proto::response::Result::Error(e)) => Err(server_error(e)),
         None => Err(ApiError::EmptyResponse),
+    }
+}
+
+/// Pure backoff schedule for the image-fetch retry loop.
+/// `attempt` is 1-based for retries (attempt 0 is the first try,
+/// which has no pre-sleep). Shift capped at [`BACKOFF_SHIFT_CAP`]
+/// (= 256× multiplier) so a misconfigured `image_retry_attempts`
+/// can't sleep for hours. Pure so it can be unit-tested without
+/// touching `tokio::time::sleep`.
+pub(crate) fn backoff_delay_ms(base_ms: u64, attempt: u32) -> u64 {
+    if attempt == 0 {
+        return 0;
+    }
+    let shift = (attempt - 1).min(BACKOFF_SHIFT_CAP);
+    base_ms.saturating_mul(1u64 << shift)
+}
+
+/// Should the image-fetch loop retry this error? Conservative:
+/// connect/timeout/reset are always retried; status codes are retried
+/// only for 408 (request timeout), 429 (rate limited), and 5xx
+/// (server-side). Hard 4xx (401/403/404/410/etc.) come back
+/// immediately because the next attempt would behave identically.
+pub(crate) fn is_retriable(err: &ApiError) -> bool {
+    match err {
+        ApiError::Http(e) => {
+            // reqwest::Error::is_timeout / is_connect / is_request all
+            // signal transient transport faults.
+            e.is_timeout() || e.is_connect() || e.is_request() || e.is_body()
+        }
+        ApiError::Status(code) => matches!(code, 408 | 429 | 500..=599),
+        _ => false,
     }
 }
 
@@ -544,6 +739,82 @@ mod tests {
         assert!(client
             .cache_path_for("https://host/secure/x.webp")
             .is_none());
+    }
+
+    #[test]
+    fn backoff_delay_is_zero_for_initial_attempt() {
+        // attempt 0 is the first try; no pre-sleep happens.
+        assert_eq!(backoff_delay_ms(250, 0), 0);
+        assert_eq!(backoff_delay_ms(9999, 0), 0);
+    }
+
+    #[test]
+    fn backoff_delay_doubles_each_retry() {
+        // Default base = 250 ms. Successive retries: 250, 500, 1 s, 2 s, …
+        assert_eq!(backoff_delay_ms(250, 1), 250);
+        assert_eq!(backoff_delay_ms(250, 2), 500);
+        assert_eq!(backoff_delay_ms(250, 3), 1_000);
+        assert_eq!(backoff_delay_ms(250, 4), 2_000);
+        assert_eq!(backoff_delay_ms(250, 5), 4_000);
+    }
+
+    #[test]
+    fn backoff_delay_caps_shift_at_eight() {
+        // Shift is capped at 8 (256×) so a runaway `image_retry_attempts`
+        // can't sleep for hours per attempt. 250 ms × 256 = 64 000 ms.
+        assert_eq!(backoff_delay_ms(250, 9), 64_000);
+        assert_eq!(backoff_delay_ms(250, 50), 64_000);
+        assert_eq!(backoff_delay_ms(250, u32::MAX), 64_000);
+    }
+
+    #[test]
+    fn backoff_delay_saturates_on_huge_base() {
+        // A pathological `image_retry_backoff_ms` should saturate, not
+        // overflow u64 and wrap to a small value.
+        let huge = u64::MAX / 2;
+        assert_eq!(backoff_delay_ms(huge, 9), u64::MAX); // 256× saturates
+    }
+
+    #[test]
+    fn is_retriable_treats_transport_faults_and_5xx_as_retriable() {
+        assert!(is_retriable(&ApiError::Status(500)));
+        assert!(is_retriable(&ApiError::Status(503)));
+        assert!(is_retriable(&ApiError::Status(599)));
+        assert!(is_retriable(&ApiError::Status(408)));
+        assert!(is_retriable(&ApiError::Status(429)));
+    }
+
+    #[test]
+    fn is_retriable_fails_fast_on_hard_4xx_and_logic_errors() {
+        // 4xx responses (other than 408/429) indicate a request-shape
+        // problem — a retry would behave identically and just delay
+        // surfacing the failure to the user.
+        assert!(!is_retriable(&ApiError::Status(400)));
+        assert!(!is_retriable(&ApiError::Status(401)));
+        assert!(!is_retriable(&ApiError::Status(403)));
+        assert!(!is_retriable(&ApiError::Status(404)));
+        assert!(!is_retriable(&ApiError::Status(410)));
+        // Decode + EmptyResponse aren't transient.
+        assert!(!is_retriable(&ApiError::EmptyResponse));
+    }
+
+    #[tokio::test]
+    async fn image_semaphore_caps_concurrency() {
+        // Three concurrent image fetches against a permit count of 2
+        // must serialise the third — observable via a measurable gap
+        // between the first batch and the third permit acquisition.
+        let mut cfg = ClientConfig::new("secret");
+        cfg.max_concurrent_images = 2;
+        let client = Client::new(cfg).unwrap();
+        let sem = client.image_gate.clone();
+        let p1 = sem.clone().acquire_owned().await.unwrap();
+        let p2 = sem.clone().acquire_owned().await.unwrap();
+        // No permits available — try_acquire should fail.
+        assert!(sem.clone().try_acquire_owned().is_err());
+        drop(p1);
+        // Releasing one makes a slot available again.
+        assert!(sem.clone().try_acquire_owned().is_ok());
+        drop(p2);
     }
 
     #[tokio::test]

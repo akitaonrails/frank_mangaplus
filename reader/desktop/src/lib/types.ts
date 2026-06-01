@@ -77,3 +77,28 @@ export type SearchView = {
     };
   }[];
 };
+
+// Returned by get_all_titles_cached. The Rust side has already
+// merged the two publication-status buckets ("serializing" +
+// "completed") and deduped by titleId — the frontend just gets a
+// flat list. `source` lets the UI distinguish SWR cases:
+//   - "fresh"   served from disk, within the TTL
+//   - "stale"   served from disk, TTL expired, a background refresh
+//               is in flight (listen for `all_titles_refreshed`)
+//   - "network" no cache existed; the command blocked on the network
+export type AllTitlesPayload = {
+  titles: Title[];
+  source: 'fresh' | 'stale' | 'network';
+  fetchedAtSecs: number;
+};
+
+// Payload of the `all_titles_refreshed` Tauri event. Carries the new
+// titles inline so the frontend doesn't have to re-call the cached
+// command after the background revalidation lands.
+export type AllTitlesRefreshedEvent = {
+  lang: string;
+  clang: string;
+  titleCount: number;
+  fetchedAtSecs: number;
+  titles: Title[];
+};
