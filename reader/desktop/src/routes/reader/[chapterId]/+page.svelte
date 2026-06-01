@@ -53,7 +53,7 @@
   // fast. The earlier this fires, the higher the chance the next
   // chapter is already loaded when the user crosses the boundary —
   // which avoids the "wait for spinner at end of chapter" experience.
-  const PREFETCH_TRIGGER_DISTANCE = 5;
+  const PREFETCH_TRIGGER_DISTANCE = 8;
 
   // The reader inherits locale from the title page via URL params.
   // Defaults apply when navigating to a chapter URL directly.
@@ -81,6 +81,14 @@
   // Ordered chapter list of the parent title, ascending by chapter_id
   // (so "next" means next in publication order).
   let allChapters: Chapter[] = $state([]);
+
+  // True once the background get_title_detail call has resolved with
+  // the canonical chapter list. While false, we treat the viewer-side
+  // truncated list as preliminary and don't render the end-of-title
+  // flag — that prevented the "🏁 You've reached the end" surfacing
+  // momentarily at the start of every chapter while the bigger list
+  // was still in flight.
+  let titleDetailLoaded = $state(false);
 
   // Auto-advance state. Three sets keep us defensive against duplicate
   // and runaway prefetches:
@@ -347,8 +355,16 @@
               // a re-upload at some point.
               allChapters = [...canonical];
             }
+            titleDetailLoaded = true;
           })
-          .catch(e => console.warn('[reader] title_detail fetch failed (using viewer.chapters):', e));
+          .catch(e => {
+            console.warn('[reader] title_detail fetch failed (using viewer.chapters):', e);
+            // Even on failure, flip the flag so the UI doesn't sit on
+            // "verifying chapter list…" forever. With only the
+            // viewer-side truncated list, end-of-title detection is
+            // weaker but the user can still navigate.
+            titleDetailLoaded = true;
+          });
       }
 
       // Resume reading: if we left this chapter mid-read last time,
@@ -508,6 +524,14 @@
 
   function goToGroupIndex(idx: number) {
     if (idx < 0 || idx >= pageGroups.length) return;
+    // Set currentGroup *immediately*, before the smooth scroll
+    // settles, so the very next keystroke / advance() call sees the
+    // correct anchor. The IntersectionObserver will reconfirm this
+    // value once the new frame passes 50% visibility, but waiting on
+    // it left a window where Space/PageDown advanced from the old
+    // group — that's why users had to press Home after a cross-
+    // chapter jump.
+    currentGroup = idx;
     frameEls[idx]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -842,13 +866,17 @@
                 Shift). onerror/onload track per-image fetch outcome so
                 we can surface a retry overlay; the imageSrc helper
                 appends a fragment when retrying so the browser refetches.
+                Fallback to typical MANGA Plus page dimensions (836x1200)
+                when the proto returned zeroes — otherwise the wrapper
+                collapses and the placeholder is invisible until bytes
+                arrive.
               -->
               <div class="page-image-wrapper">
                 <img
                   src={imageSrc(lp.mp.imageUrl)}
                   alt="Page {group.firstPageIndex + pi + 1}"
-                  width={lp.mp.width}
-                  height={lp.mp.height}
+                  width={lp.mp.width || 836}
+                  height={lp.mp.height || 1200}
                   loading={group.firstPageIndex + pi < 3 ? 'eager' : 'lazy'}
                   decoding="async"
                   class="manga-page"
@@ -888,14 +916,26 @@
             <div class="spinner"></div>
             <span>loading next chapter{nextChapterInfo?.name ? ` (${nextChapterInfo.name})` : ''}…</span>
           </div>
-        {:else if loadedPages.length > 0 && nextChapterInfo == null}
+        {:else if loadedPages.length > 0 && nextChapterInfo == null && titleDetailLoaded}
           <!-- True end of the title — no further chapter exists in the
-               catalog at this language/country. -->
+               catalog at this language/country. Gated on
+               titleDetailLoaded so the flag doesn't surface at the
+               start of every chapter while the viewer-side truncated
+               list is still all we have. -->
           <div class="end-of-title">
             <div class="end-of-title-glyph">🏁</div>
             <h2>You've reached the end</h2>
             <p>No further chapters are available right now. New releases drop on the schedule MANGA Plus publishes — check back later.</p>
             <button class="back-to-title-btn" onclick={goBack}>Back to title page</button>
+          </div>
+        {:else if loadedPages.length > 0 && nextChapterInfo == null && !titleDetailLoaded}
+          <!-- Truncated viewer.chapters thinks we're at the end, but
+               the canonical list from title_detail hasn't arrived
+               yet. Show a soft "checking" indicator instead of the
+               loud end-of-title flag. -->
+          <div class="loading-next">
+            <div class="spinner"></div>
+            <span>checking for more chapters…</span>
           </div>
         {:else if nextChapterInfo?.failed}
           <!-- Previous prefetch failed (timeout, network, server error).
@@ -1112,16 +1152,24 @@
   .page-stack.eye-med  .manga-page { filter: sepia(0.50) brightness(0.90) saturate(0.85); }
   .page-stack.eye-high .manga-page { filter: sepia(0.75) brightness(0.82) saturate(0.70); }
 
+  /* Each frame is exactly viewport-fit-height so scroll-snap settles
+     cleanly on a single frame at a time. The image is centered inside
+     a flex container so portrait pages don't peek at the next frame's
+     top from the viewport bottom, and so wider images don't push the
+     frame past the viewport. Dynamic via the vh unit — resizing the
+     window reflows automatically.
+     The earlier behaviour (frame sized to image) saved black space but
+     left bottom-of-viewport peek for any page shorter than the screen
+     and made scroll-snap unreliable across chapter transitions. */
   .page-frame {
-    /* Size to the contained image — no fixed viewport-height frame.
-       That used to letterbox shorter/landscape pages with equal top+
-       bottom whitespace, which the user (rightly) read as a huge gap.
-       Now the frame is just-the-image, and the only inter-page gap is
-       the margin below. */
-    width: auto;
-    max-width: 100%;
-    margin: 0 auto 4px;
-    display: block;
+    width: 100%;
+    /* Header is 48px sticky, footer is 32px, plus a few px slack so the
+       frame doesn't poke into the footer's border. */
+    min-height: calc(100vh - 48px - 32px - 8px);
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     position: relative;
     scroll-snap-align: start;
     scroll-snap-stop: always;
@@ -1130,20 +1178,18 @@
   /* Double-page pair: lay out side-by-side in manga RTL order so the
      first page of the pair sits on the right and the second on the
      left. The user reads right-page first, then jumps to left-page,
-     then scrolls/clicks to the next pair. */
+     then scrolls/clicks to the next pair. The base .page-frame already
+     centers via flex; this just changes the axis direction. */
   .page-frame.is-pair {
-    display: flex;
     flex-direction: row-reverse;
-    align-items: flex-start;
-    justify-content: center;
     gap: 2px;
   }
 
   .manga-page {
-    /* Cap a single page to the visible reader area (viewport minus
-       header + footer + a little for the gap). Width is then
-       proportional via the image's intrinsic aspect ratio. */
-    max-height: calc(100vh - 48px - 32px - 4px);
+    /* Cap each page to fit within the frame (which is viewport-height
+       minus header + footer slack). Width is then proportional via the
+       image's intrinsic aspect ratio. */
+    max-height: calc(100vh - 48px - 32px - 8px);
     max-width: 100%;
     width: auto;
     height: auto;
