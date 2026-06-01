@@ -1186,13 +1186,15 @@
   }
 
   .manga-page {
-    /* Cap each page to fit within the frame (which is viewport-height
-       minus header + footer slack). Width is then proportional via the
-       image's intrinsic aspect ratio. */
-    max-height: calc(100vh - 48px - 32px - 8px);
-    max-width: 100%;
+    /* Stretch each page to fill the frame height proportionally.
+       `height` (not `max-height`) forces scale-up too, so short
+       intrinsic-size pages (Akane-banashi-style) no longer render at
+       70% of viewport with black bars above/below. Width is `auto`
+       so the aspect ratio is preserved; max-width: 100% guards
+       against the rare ultra-wide spread overflowing its wrapper. */
+    height: calc(100vh - 48px - 32px - 8px);
     width: auto;
-    height: auto;
+    max-width: 100%;
     display: block;
     background: #1a1a1a;
     user-select: none;
