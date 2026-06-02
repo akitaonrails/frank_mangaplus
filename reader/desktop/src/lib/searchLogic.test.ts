@@ -5,6 +5,7 @@ import {
   paginate,
   computeButtonLabel,
   buttonDisabled,
+  clearFavoriteErrorState,
   DEFAULT_VISIBLE_CAP,
 } from './searchLogic';
 import type { SearchView, Title } from './types';
@@ -154,5 +155,29 @@ describe('buttonDisabled', () => {
 
   it('idle is enabled', () => {
     expect(buttonDisabled(false, undefined)).toBe(false);
+  });
+});
+
+describe('clearFavoriteErrorState', () => {
+  it('clears an expired error state for the matching title only', () => {
+    const states = new Map<number, 'pending' | 'error'>([
+      [1, 'error'],
+      [2, 'pending'],
+    ]);
+
+    const next = clearFavoriteErrorState(states, 1);
+
+    expect(next.has(1)).toBe(false);
+    expect(next.get(2)).toBe('pending');
+    expect(states.get(1)).toBe('error');
+  });
+
+  it('does not erase a newer pending retry when an older error timer fires', () => {
+    const states = new Map<number, 'pending' | 'error'>([[7, 'pending']]);
+
+    const next = clearFavoriteErrorState(states, 7);
+
+    expect(next).toBe(states);
+    expect(next.get(7)).toBe('pending');
   });
 });

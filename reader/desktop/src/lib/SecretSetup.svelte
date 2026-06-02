@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { withIpcTimeout } from '$lib/ipcTimeout';
 
   // Three startup states this dialog handles:
   //   1. configured === false     → auto-register failed AND no secret on disk
@@ -19,11 +20,21 @@
 
   async function check() {
     try {
-      configured = await invoke<boolean>('is_configured');
-      autoRegistered = await invoke<boolean>('is_auto_registered');
+      configured = await withIpcTimeout(invoke<boolean>('is_configured'));
     } catch (e) {
       configured = false;
-      console.warn('is_configured/is_auto_registered failed', e);
+      autoRegistered = false;
+      console.warn('is_configured failed', e);
+      return;
+    }
+
+    try {
+      autoRegistered = configured
+        ? await withIpcTimeout(invoke<boolean>('is_auto_registered'))
+        : false;
+    } catch (e) {
+      autoRegistered = false;
+      console.warn('is_auto_registered failed', e);
     }
   }
 
@@ -32,7 +43,7 @@
     saving = true;
     error = '';
     try {
-      await invoke<void>('set_secret', { value: value.trim() });
+      await withIpcTimeout(invoke<void>('set_secret', { value: value.trim() }));
       configured = true;
       autoRegistered = false;
       value = '';
@@ -48,7 +59,7 @@
   async function continueFree() {
     acknowledging = true;
     try {
-      await invoke<void>('acknowledge_free_tier');
+      await withIpcTimeout(invoke<void>('acknowledge_free_tier'));
       autoRegistered = false;
     } catch (e) {
       console.warn('acknowledge_free_tier failed', e);

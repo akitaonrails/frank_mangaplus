@@ -66,23 +66,29 @@ ROUTES=(
 )
 FAILED=0
 for r in "${ROUTES[@]}"; do
+  module_url="http://localhost:1420/src/routes/${r}/+page.svelte"
+  curl -sS -o /dev/null "$module_url"
   url="http://localhost:1420/src/routes/${r}/+page.svelte?svelte&type=style&lang.css"
-  status=$(curl -sS -o /dev/null -w "%{http_code}" "$url")
-  if [ "$status" = "200" ]; then
+  safe_r="${r:-index}"
+  safe_r="${safe_r//\//_}"
+  body="/tmp/verify-style-${safe_r}.css"
+  status=$(curl -sS -o "$body" -w "%{http_code}" "$url")
+  if [ "$status" = "200" ] && ! grep -q '<script' "$body"; then
     ok "/${r:-(index)} style chunk OK"
   else
-    printf '   \033[1;31m✗\033[0m /%s style chunk HTTP %s\n' "${r:-(index)}" "$status" >&2
+    printf '   \033[1;31m✗\033[0m /%s style chunk HTTP %s or raw Svelte payload\n' "${r:-(index)}" "$status" >&2
     FAILED=$((FAILED+1))
   fi
 done
 
 # Also check the +layout.svelte
+curl -sS -o /dev/null "http://localhost:1420/src/routes/+layout.svelte"
 url="http://localhost:1420/src/routes/+layout.svelte?svelte&type=style&lang.css"
-status=$(curl -sS -o /dev/null -w "%{http_code}" "$url")
-if [ "$status" = "200" ]; then
+status=$(curl -sS -o /tmp/verify-style-layout.css -w "%{http_code}" "$url")
+if [ "$status" = "200" ] && ! grep -q '<script' /tmp/verify-style-layout.css; then
   ok "+layout.svelte style chunk OK"
 else
-  printf '   \033[1;31m✗\033[0m +layout.svelte style chunk HTTP %s\n' "$status" >&2
+  printf '   \033[1;31m✗\033[0m +layout.svelte style chunk HTTP %s or raw Svelte payload\n' "$status" >&2
   FAILED=$((FAILED+1))
 fi
 

@@ -23,8 +23,9 @@
 <svelte:window on:keydown={onKey} />
 
 {#if open}
-  <div class="overlay" role="dialog" aria-modal="true" aria-labelledby="help-title" onclick={onclose}>
-    <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
+  <div class="overlay">
+    <button class="backdrop" type="button" aria-label="Close help" onclick={onclose}></button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1">
       <header class="modal-header">
         <h2 id="help-title">Reader controls</h2>
         <button class="close-btn" aria-label="Close" onclick={onclose}>×</button>
@@ -79,7 +80,6 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.78);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -88,7 +88,18 @@
     overflow-y: auto;
   }
 
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    border: 0;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.78);
+    cursor: default;
+  }
+
   .modal {
+    position: relative;
+    z-index: 1;
     width: 100%;
     max-width: 540px;
     max-height: 90vh;

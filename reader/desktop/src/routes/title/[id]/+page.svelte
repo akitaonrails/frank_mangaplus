@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import type { TitleDetailView, Chapter, SubscribedTitlesView } from '$lib/types';
+  import type { TitleDetailView, Chapter } from '$lib/types';
   import {
     getReadChapters,
     getLastReadChapter,
@@ -12,6 +11,8 @@
   } from '$lib/readState';
   import { proxied } from '$lib/img';
   import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
+  import { withIpcTimeout } from '$lib/ipcTimeout';
+  import { addFavorite, getFavorites, getTitleDetail, removeFavorite } from '$lib/ipcCommands';
 
   // URL-controlled. Library cards encode the title's own language as a
   // `?lang=` query param so e.g. a Portuguese title's detail view comes
@@ -20,13 +21,14 @@
   let clang = $derived($page.url.searchParams.get('clang') ?? DEFAULT_CLANG);
   let country = $derived($page.url.searchParams.get('country') ?? DEFAULT_COUNTRY);
 
-  let titleId = $derived(parseInt($page.params.id, 10));
+  let titleId = $derived(Number.parseInt($page.params.id ?? '', 10));
 
   let loading = $state(true);
   let error = $state('');
   let detail: TitleDetailView | null = $state(null);
   let isFavorited = $state(false);
   let favPending = $state(false);
+  let favError = $state('');
   let sortDesc = $state(true);
   let readSet: Set<number> = $state(new Set());
   let lastReadId: number | null = $state(null);
@@ -42,15 +44,28 @@
   const ITEM_HEIGHT = 72; // approximate px per row
   const OVERSCAN = 10;
 
-  let bannerCss = $derived(
-    detail && detail.backgroundImageUrl
-      ? 'url(' + proxied(detail.backgroundImageUrl) + ')'
-      : 'none'
-  );
+  let bannerCss = $derived.by(() => {
+    const bg = detail?.backgroundImageUrl;
+    return bg ? 'url(' + proxied(bg) + ')' : 'none';
+  });
 
   let totalHeight = $derived(rows.length * ITEM_HEIGHT);
   let offsetTop = $derived(visibleStart * ITEM_HEIGHT);
   let visibleRows = $derived(rows.slice(visibleStart, visibleEnd));
+  type StyleMap = Record<string, string>;
+  let bannerStyles = $derived({ 'background-image': bannerCss });
+  let spacerStyles = $derived({ height: totalHeight + 'px', position: 'relative' });
+  let virtualRowsStyles = $derived({ position: 'absolute', top: offsetTop + 'px', left: '0', right: '0' });
+
+  function applyStyles(node: HTMLElement, styles: StyleMap) {
+    const update = (next: StyleMap) => {
+      for (const [name, value] of Object.entries(next)) {
+        node.style.setProperty(name, value);
+      }
+    };
+    update(styles);
+    return { update };
+  }
 
   // Suffix appended to /reader/<id> links so the reader inherits this
   // page's locale. Derived from clang/country so reactivity stays clean.
@@ -62,9 +77,28 @@
     return s ? '?' + s : '';
   });
 
-  onMount(async () => {
+  let loadSeq = 0;
+
+  onMount(() => {
     sortDesc = getSortDescending();
-    await loadDetail();
+  });
+
+  $effect(() => {
+    const id = titleId;
+    const activeLang = lang;
+    const activeClang = clang;
+    const activeCountry = country;
+    const seq = ++loadSeq;
+
+    if (!Number.isFinite(id)) {
+      detail = null;
+      rows = [];
+      loading = false;
+      error = 'Invalid title id.';
+      return;
+    }
+
+    void loadDetail(id, activeLang, activeClang, activeCountry, seq);
   });
 
   // Reload read-state and rows whenever titleId / sortDesc change.
@@ -76,33 +110,51 @@
     }
   });
 
-  async function loadDetail() {
+  async function loadDetail(
+    id = titleId,
+    activeLang = lang,
+    activeClang = clang,
+    activeCountry = country,
+    seq = ++loadSeq,
+  ) {
     loading = true;
     error = '';
-    const id = parseInt($page.params.id, 10);
+    favError = '';
+    detail = null;
+    rows = [];
     try {
-      const d = await invoke<TitleDetailView>('get_title_detail', {
+      const d = await withIpcTimeout(getTitleDetail({
         titleId: id,
-        lang,
-        clang,
-        countryCode: country,
-      });
+        lang: activeLang,
+        clang: activeClang,
+        countryCode: activeCountry,
+      }));
+      if (seq !== loadSeq) return;
       detail = d;
       readSet = getReadChapters(id);
       lastReadId = getLastReadChapter(id);
       buildRows(d);
-
-      try {
-        const favs = await invoke<SubscribedTitlesView>('get_favorites');
-        isFavorited = (favs.titles ?? []).some(t => t.titleId === id);
-      } catch (e) {
-        console.warn('[title] fetching favorites failed:', e);
-      }
-    } catch (e) {
-      console.error('[title] loadDetail error:', e);
-      error = String(e);
-    } finally {
       loading = false;
+
+      void loadFavoriteState(id, seq);
+    } catch (e) {
+      if (seq !== loadSeq) return;
+      console.error('[title] loadDetail error:', e);
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      if (seq === loadSeq) loading = false;
+    }
+  }
+
+  async function loadFavoriteState(id: number, seq = loadSeq) {
+    try {
+      const favs = await withIpcTimeout(getFavorites());
+      if (seq !== loadSeq) return;
+      isFavorited = (favs.titles ?? []).some(t => t.titleId === id);
+    } catch (e) {
+      if (seq !== loadSeq) return;
+      console.warn('[title] fetching favorites failed:', e);
+      favError = 'Library state unavailable. Favorite changes may fail until you retry.';
     }
   }
 
@@ -173,15 +225,20 @@
 
   async function toggleFavorite() {
     if (favPending || !detail?.title) return;
+    const id = detail.title.titleId;
+    const nextFavorited = !isFavorited;
     favPending = true;
+    favError = '';
     try {
-      if (isFavorited) {
-        await invoke<void>('remove_favorite', { titleId: detail.title.titleId });
-        isFavorited = false;
+      if (nextFavorited) {
+        await withIpcTimeout(addFavorite(id));
       } else {
-        await invoke<void>('add_favorite', { titleId: detail.title.titleId });
-        isFavorited = true;
+        await withIpcTimeout(removeFavorite(id));
       }
+      isFavorited = nextFavorited;
+    } catch (e) {
+      console.warn(`[title] favorite toggle ${id} failed:`, e);
+      favError = e instanceof Error ? e.message : String(e);
     } finally {
       favPending = false;
     }
@@ -195,7 +252,10 @@
 {#if loading}
   <div class="spinner"></div>
 {:else if error}
-  <div class="empty-state"><p>Error: {error}</p></div>
+  <div class="empty-state">
+    <p>Error: {error}</p>
+    <p><button class="retry-btn" onclick={() => void loadDetail()}>↻ Retry</button></p>
+  </div>
 {:else if detail}
   {@const title = detail.title}
   <div class="detail-page">
@@ -203,7 +263,7 @@
     <div
       class="banner"
       class:has-image={!!detail.backgroundImageUrl}
-      style:background-image={bannerCss}
+      use:applyStyles={bannerStyles}
     >
       <div class="banner-overlay">
         <h1 class="banner-title">{title?.name ?? ''}</h1>
@@ -229,8 +289,12 @@
           onclick={toggleFavorite}
           disabled={favPending}
         >
-          {isFavorited ? '♥ Remove from Library' : '♡ Add to Library'}
+          {favPending ? 'Saving…' : isFavorited ? '♥ Remove from Library' : '♡ Add to Library'}
         </button>
+
+        {#if favError}
+          <p class="fav-error">{favError}</p>
+        {/if}
 
         {#if detail.overview}
           <p class="overview">{detail.overview}</p>
@@ -259,13 +323,8 @@
             bind:this={listContainer}
           >
             <!-- spacer to maintain correct scroll height -->
-            <div style:height={totalHeight + 'px'} style:position="relative">
-              <div
-                style:position="absolute"
-                style:top={offsetTop + 'px'}
-                style:left="0"
-                style:right="0"
-              >
+            <div use:applyStyles={spacerStyles}>
+              <div use:applyStyles={virtualRowsStyles}>
                 {#each visibleRows as row, i (visibleStart + i)}
                   {#if row.type === 'divider'}
                     <div class="chapter-divider">{row.label}</div>
@@ -397,6 +456,28 @@
     background: var(--accent);
     border-color: var(--accent);
     color: #fff;
+  }
+
+  .fav-error {
+    color: #ff8f8f;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    margin: 0;
+  }
+
+  .retry-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .retry-btn:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
   }
 
   .overview {

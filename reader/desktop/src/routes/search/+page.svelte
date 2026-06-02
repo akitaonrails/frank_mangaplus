@@ -17,8 +17,10 @@
     paginate,
     computeButtonLabel,
     buttonDisabled,
+    clearFavoriteErrorState,
     DEFAULT_VISIBLE_CAP,
   } from '$lib/searchLogic';
+  import { withIpcTimeout } from '$lib/ipcTimeout';
 
   // Two catalogs, served in tiers:
   //   - curated: ~hundreds of titles from /title_list/search. Fast,
@@ -60,6 +62,8 @@
   let hiddenCount = $derived(pagination.hiddenCount);
 
   let unlisten: UnlistenFn | null = null;
+  let alive = true;
+  const favoriteResetTimers = new Map<number, ReturnType<typeof setTimeout>>();
   // Locale currently in effect for this page session. Captured once at
   // mount so every IPC and every refresh-event filter agrees, even if
   // the module-level DEFAULT_LANG ever becomes user-configurable.
@@ -69,37 +73,11 @@
   const activeLang = DEFAULT_LANG;
   const activeClang = DEFAULT_CLANG;
 
-  onMount(async () => {
-    // Parallel fetches: curated catalog (fast) + library set (for
-    // already-in-library indicators). Either can fail independently
-    // without blocking the other.
-    const curatedP = invoke<SearchView>('search', {
-      lang: activeLang,
-      clang: activeClang,
-    });
-    const libP = invoke<SubscribedTitlesView>('get_favorites');
-
-    try {
-      const view = await curatedP;
-      curated = flattenSearchView(view);
-    } catch (e) {
-      error = String(e);
-    } finally {
-      loading = false;
-    }
-
-    try {
-      const libView = await libP;
-      libraryIds = new Set((libView.titles ?? []).map(t => t.titleId));
-    } catch (e) {
-      console.warn('[search] library fetch failed (button state will degrade):', e);
-    }
-
-    // Listen for SWR background-refresh completions. The Rust side
-    // emits this after a stale read has been re-fetched; payload
-    // carries the merged title list inline so we don't have to
-    // re-invoke.
-    unlisten = await listen<AllTitlesRefreshedEvent>(
+  onMount(() => {
+    // Register the SWR refresh listener before any catalog fetch can
+    // trigger a background refresh. `listen()` itself is async, so guard
+    // the late resolution path to avoid leaking after navigation away.
+    void listen<AllTitlesRefreshedEvent>(
       'all_titles_refreshed',
       ev => {
         if (ev.payload.lang !== activeLang || ev.payload.clang !== activeClang) {
@@ -110,11 +88,53 @@
         catalogSource = 'fresh (refreshed)';
         console.log(`[search] catalog refreshed: ${ev.payload.titleCount} titles`);
       },
-    );
+    ).then(fn => {
+      if (alive) unlisten = fn;
+      else fn();
+    }).catch(e => {
+      console.warn('[search] all_titles_refreshed listener failed:', e);
+    });
+
+    void loadCuratedAndLibrary();
   });
 
+  async function loadCuratedAndLibrary() {
+    loading = true;
+    error = '';
+    // Parallel fetches: curated catalog (fast) + library set (for
+    // already-in-library indicators). Either can fail independently
+    // without blocking the other.
+    const curatedP = withIpcTimeout(invoke<SearchView>('search', {
+      lang: activeLang,
+      clang: activeClang,
+    }));
+    const libP = withIpcTimeout(invoke<SubscribedTitlesView>('get_favorites'));
+
+    try {
+      const view = await curatedP;
+      if (!alive) return;
+      curated = flattenSearchView(view);
+    } catch (e) {
+      if (!alive) return;
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      if (alive) loading = false;
+    }
+
+    try {
+      const libView = await libP;
+      if (!alive) return;
+      libraryIds = new Set((libView.titles ?? []).map(t => t.titleId));
+    } catch (e) {
+      console.warn('[search] library fetch failed (button state will degrade):', e);
+    }
+  }
+
   onDestroy(() => {
+    alive = false;
     unlisten?.();
+    for (const timer of favoriteResetTimers.values()) clearTimeout(timer);
+    favoriteResetTimers.clear();
   });
 
   /** Lazy-fetch the full catalog. Called the first time the user
@@ -125,10 +145,11 @@
     if (fullStatus !== 'idle') return;
     fullStatus = 'loading';
     try {
-      const payload = await invoke<AllTitlesPayload>('get_all_titles_cached', {
+      const payload = await withIpcTimeout(invoke<AllTitlesPayload>('get_all_titles_cached', {
         lang: activeLang,
         clang: activeClang,
-      });
+      }));
+      if (!alive) return;
       full = payload.titles ?? [];
       fullStatus = 'ready';
       catalogSource = payload.source;
@@ -166,11 +187,13 @@
     } catch (e) {
       console.warn(`[search] add_favorite ${title.titleId} failed:`, e);
       buttonState = new Map(buttonState).set(title.titleId, 'error');
-      setTimeout(() => {
-        const next = new Map(buttonState);
-        next.delete(title.titleId);
-        buttonState = next;
+      const oldTimer = favoriteResetTimers.get(title.titleId);
+      if (oldTimer) clearTimeout(oldTimer);
+      const timer = setTimeout(() => {
+        favoriteResetTimers.delete(title.titleId);
+        buttonState = clearFavoriteErrorState(buttonState, title.titleId);
       }, 2000);
+      favoriteResetTimers.set(title.titleId, timer);
     }
   }
 </script>
@@ -205,7 +228,10 @@
   {#if loading}
     <div class="spinner"></div>
   {:else if error}
-    <div class="empty-state"><p>Error: {error}</p></div>
+    <div class="empty-state">
+      <p>Error: {error}</p>
+      <p><button class="retry-btn" onclick={() => void loadCuratedAndLibrary()}>↻ Retry</button></p>
+    </div>
   {:else if filtered.length === 0}
     <div class="empty-state">
       <p>No titles match "{query}"{fullStatus === 'ready' ? ' in the full catalog.' : '.'}</p>

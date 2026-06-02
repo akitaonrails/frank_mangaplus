@@ -94,3 +94,20 @@ export function buttonDisabled(
 ): boolean {
   return inLibrary || state === 'pending';
 }
+
+/**
+ * Clear a transient favorite-button error only if it is still the active
+ * state. The search page schedules this from setTimeout after a failed
+ * add; if the user retries before the timer fires, the state may have
+ * moved back to `pending`, and the old timer must not erase that newer
+ * in-flight operation.
+ */
+export function clearFavoriteErrorState(
+  states: Map<number, Exclude<FavButtonState, undefined>>,
+  titleId: number,
+): Map<number, Exclude<FavButtonState, undefined>> {
+  if (states.get(titleId) !== 'error') return states;
+  const next = new Map(states);
+  next.delete(titleId);
+  return next;
+}

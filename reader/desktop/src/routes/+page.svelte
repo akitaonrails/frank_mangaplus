@@ -4,6 +4,7 @@
   import type { SubscribedTitlesView, Title } from '$lib/types';
   import TitleCard from '$lib/TitleCard.svelte';
   import { langCode } from '$lib/lang';
+  import { withIpcTimeout } from '$lib/ipcTimeout';
 
   let loading = $state(true);
   let error = $state('');
@@ -17,13 +18,7 @@
     loading = true;
     error = '';
     try {
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Timed out after 12 s — API may be rate-limited or unreachable')), 12_000),
-      );
-      const view = await Promise.race([
-        invoke<SubscribedTitlesView>('get_favorites'),
-        timeout,
-      ]);
+      const view = await withIpcTimeout(invoke<SubscribedTitlesView>('get_favorites'));
       titles = view.titles ?? [];
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);

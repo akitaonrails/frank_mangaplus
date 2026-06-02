@@ -33,6 +33,7 @@
   } from '$lib/readerLogic';
   import { proxied } from '$lib/img';
   import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
+  import { withIpcTimeout } from '$lib/ipcTimeout';
 
   /** Immutable Set update helpers — Svelte 5 needs a new reference to
    *  notice the change, and `new Set(old).add(x)` was repeated in 6+
@@ -112,27 +113,42 @@
   // hangs, returning control is more important than waiting forever.
   const CHAPTER_FETCH_TIMEOUT_MS = 12_000;
 
+  type FetchChapterResult =
+    | { ok: true; viewer: MangaViewer }
+    | { ok: false; error: string; timedOut: boolean };
+
+  const chapterRequests = new Map<string, Promise<MangaViewer>>();
+
+  function chapterRequest(chapterId: number): Promise<MangaViewer> {
+    const requestKey = `${chapterId}:${clang}:${country}`;
+    const existing = chapterRequests.get(requestKey);
+    if (existing) return existing;
+
+    const request = invoke<MangaViewer>('get_chapter_pages', {
+      chapterId,
+      imgQuality: 'super_high',
+      viewerMode: 'vertical',
+      clang,
+      countryCode: country,
+    }).finally(() => {
+      chapterRequests.delete(requestKey);
+    });
+    chapterRequests.set(requestKey, request);
+    return request;
+  }
+
   /** Wraps invoke('get_chapter_pages') with the same timeout for both
-   * loadInitial() and maybePrefetchNext(). Returns null on timeout/
-   * error rather than throwing — callers handle the null path. */
-  async function fetchChapter(chapterId: number): Promise<MangaViewer | null> {
+   * loadInitial() and maybePrefetchNext(). Duplicate calls for the same
+   * chapter reuse the original invoke promise until it actually settles,
+   * so a frontend timeout does not start a second Rust fetch. */
+  async function fetchChapter(chapterId: number): Promise<FetchChapterResult> {
     try {
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`timed out after ${CHAPTER_FETCH_TIMEOUT_MS}ms`)), CHAPTER_FETCH_TIMEOUT_MS),
-      );
-      return await Promise.race([
-        invoke<MangaViewer>('get_chapter_pages', {
-          chapterId,
-          imgQuality: 'super_high',
-          viewerMode: 'vertical',
-          clang,
-          countryCode: country,
-        }),
-        timeout,
-      ]);
+      const viewer = await withIpcTimeout(chapterRequest(chapterId), CHAPTER_FETCH_TIMEOUT_MS);
+      return { ok: true, viewer };
     } catch (e) {
       console.warn(`[reader] fetchChapter(${chapterId}) failed:`, e);
-      return null;
+      const error = e instanceof Error ? e.message : String(e);
+      return { ok: false, error, timedOut: error.startsWith('Timed out after') };
     }
   }
 
@@ -179,6 +195,7 @@
   const AUTO_RETRY_DELAY_MS = 600;
   let imageAttempts: Map<string, number> = $state(new Map());
   let failedImageUrls: Set<string> = $state(new Set());
+  const imageRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   function imageSrc(url: string): string {
     const base = proxied(url);
@@ -201,15 +218,24 @@
     // Schedule a delayed retry; we bump the counter when the timer
     // fires so the browser doesn't get hammered on a fast loop. The
     // map update triggers a reactive re-render with a new src.
-    setTimeout(() => {
+    const oldTimer = imageRetryTimers.get(url);
+    if (oldTimer) clearTimeout(oldTimer);
+    const timer = setTimeout(() => {
+      imageRetryTimers.delete(url);
       imageAttempts = new Map(imageAttempts).set(url, attempts + 1);
     }, AUTO_RETRY_DELAY_MS);
+    imageRetryTimers.set(url, timer);
   }
 
   function onImageLoad(url: string) {
     // A retry (auto or manual) finally succeeded — clear the failure
     // surface. We keep the attempts count so a later transient error
     // doesn't reset the budget.
+    const timer = imageRetryTimers.get(url);
+    if (timer) {
+      clearTimeout(timer);
+      imageRetryTimers.delete(url);
+    }
     if (failedImageUrls.has(url)) {
       failedImageUrls = setWithoutStr(failedImageUrls, url);
     }
@@ -221,6 +247,11 @@
     // flight. If THIS attempt fails too, onImageError sees attempts
     // already >= MAX and immediately re-adds to failedImageUrls.
     const attempts = (imageAttempts.get(url) ?? 0) + 1;
+    const timer = imageRetryTimers.get(url);
+    if (timer) {
+      clearTimeout(timer);
+      imageRetryTimers.delete(url);
+    }
     imageAttempts = new Map(imageAttempts).set(url, attempts);
     failedImageUrls = setWithoutStr(failedImageUrls, url);
   }
@@ -229,6 +260,9 @@
     if (failedImageUrls.size === 0) return;
     const next = new Map(imageAttempts);
     for (const url of failedImageUrls) {
+      const timer = imageRetryTimers.get(url);
+      if (timer) clearTimeout(timer);
+      imageRetryTimers.delete(url);
       next.set(url, (next.get(url) ?? 0) + 1);
     }
     imageAttempts = next;
@@ -279,10 +313,11 @@
 
   // ---------- load ----------
 
+  let loadSeq = 0;
+
   onMount(() => {
     pageMode = getPageMode();
     eyeFilter = getEyeFilter();
-    void loadInitial();
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
@@ -290,21 +325,75 @@
     };
   });
 
-  onDestroy(() => observer?.disconnect());
+  onDestroy(() => {
+    observer?.disconnect();
+    clearImageRetryTimers();
+  });
 
-  async function loadInitial() {
-    const chapterId = parseInt($page.params.chapterId, 10);
+  function clearImageRetryTimers() {
+    for (const timer of imageRetryTimers.values()) clearTimeout(timer);
+    imageRetryTimers.clear();
+  }
+
+  $effect(() => {
+    const rawChapterId = $page.params.chapterId;
+    const activeLang = lang;
+    const activeClang = clang;
+    const activeCountry = country;
+    const chapterId = Number.parseInt(rawChapterId ?? '', 10);
+    const seq = ++loadSeq;
+
+    if (!Number.isFinite(chapterId)) {
+      resetReaderState();
+      loading = false;
+      error = 'Invalid chapter id.';
+      return;
+    }
+
+    void loadInitial(chapterId, activeLang, activeClang, activeCountry, seq);
+  });
+
+  function resetReaderState() {
     error = '';
+    initialViewer = null;
+    loadedPages = [];
+    loadedChapterIds = new Set();
+    allChapters = [];
+    titleDetailLoaded = false;
+    prefetchingChapterIds = new Set();
+    failedChapterIds = new Set();
+    clearImageRetryTimers();
+    imageAttempts = new Map();
+    failedImageUrls = new Set();
+    currentGroup = 0;
+    lastMarkedChapter = 0;
+    chapterFlashKey = 0;
+    lastPrefetchPage = -1;
+    advancing = false;
+    flipping = false;
+    observer?.disconnect();
+  }
+
+  async function loadInitial(
+    chapterId = Number.parseInt($page.params.chapterId ?? '', 10),
+    activeLang = lang,
+    activeClang = clang,
+    activeCountry = country,
+    seq = ++loadSeq,
+  ) {
+    resetReaderState();
     loading = true;
     try {
-      const v = await fetchChapter(chapterId);
-      if (!v) {
+      const result = await fetchChapter(chapterId);
+      if (seq !== loadSeq) return;
+      if (!result.ok) {
         // Surface a retry path instead of an infinite spinner. The
         // user-visible error block has a Retry button that re-runs
         // loadInitial.
-        error = `Couldn't load chapter (timed out after ${CHAPTER_FETCH_TIMEOUT_MS / 1000}s). API may be rate-limited.`;
+        error = `Couldn't load chapter: ${result.error}`;
         return;
       }
+      const v = result.viewer;
       initialViewer = v;
       // The manga_viewer_v3 response's `chapters` field is NOT the full
       // chapter list — for most titles past chapter 3-ish it's truncated
@@ -328,13 +417,14 @@
       // Kick off title_detail in the background to get the authoritative
       // chapter list. Doesn't block the user seeing the first pages.
       if (v.titleId) {
-        void invoke<TitleDetailView>('get_title_detail', {
+        void withIpcTimeout(invoke<TitleDetailView>('get_title_detail', {
           titleId: v.titleId,
-          lang,
-          clang,
-          countryCode: country,
-        })
+          lang: activeLang,
+          clang: activeClang,
+          countryCode: activeCountry,
+        }))
           .then(detail => {
+            if (seq !== loadSeq) return;
             const canonical: Chapter[] =
               detail.chapterListV2 && detail.chapterListV2.length > 0
                 ? detail.chapterListV2
@@ -358,6 +448,7 @@
             titleDetailLoaded = true;
           })
           .catch(e => {
+            if (seq !== loadSeq) return;
             console.warn('[reader] title_detail fetch failed (using viewer.chapters):', e);
             // Even on failure, flip the flag so the UI doesn't sit on
             // "verifying chapter list…" forever. With only the
@@ -377,6 +468,7 @@
       const resumePage = getLastReadPage(chapterId);
       if (resumePage && resumePage > 1) {
         await tick();
+        if (seq !== loadSeq) return;
         const targetGroup = findGroupContainingPage(pageGroups, resumePage - 1);
         if (targetGroup > 0 && frameEls[targetGroup]) {
           // 'instant' so the user lands where they were without a
@@ -385,9 +477,10 @@
         }
       }
     } catch (e) {
+      if (seq !== loadSeq) return;
       error = String(e);
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 
@@ -435,14 +528,15 @@
     // be revisited if it fails again.
     if (force) failedChapterIds = setWithout(failedChapterIds, nextId);
 
-    const v = await fetchChapter(nextId);
+    const result = await fetchChapter(nextId);
 
     prefetchingChapterIds = setWithout(prefetchingChapterIds, nextId);
-    if (v) {
-      appendChapter(v);
+    if (result.ok) {
+      appendChapter(result.viewer);
     } else {
       // Auto-prefetch stops re-firing for this chapter; manual retry
       // (Load next / Retry button) clears the flag via force=true.
+      console.warn(`[reader] next chapter ${nextId} failed: ${result.error}`);
       failedChapterIds = setWith(failedChapterIds, nextId);
     }
   }
@@ -554,6 +648,7 @@
 
   async function pageFlip(direction: 'forward' | 'back') {
     if (flipping || !scrollRoot || !pageStackEl) return;
+    const stack = pageStackEl;
     const targetGroup = currentGroup + (direction === 'forward' ? 1 : -1);
     if (targetGroup < 0 || targetGroup >= pageGroups.length) return;
     const targetEl = frameEls[targetGroup];
@@ -568,25 +663,25 @@
     const DURATION = 220;
 
     try {
-      pageStackEl.style.willChange = 'transform';
-      pageStackEl.style.transition = `transform ${DURATION}ms ease-out`;
-      pageStackEl.style.transform = `translateX(${slideOut})`;
+      stack.style.willChange = 'transform';
+      stack.style.transition = `transform ${DURATION}ms ease-out`;
+      stack.style.transform = `translateX(${slideOut})`;
       await new Promise(r => setTimeout(r, DURATION));
 
       // Mid-flip: nothing is visible, so we can jump the scroll and
       // reset the transform without the user seeing either change.
-      pageStackEl.style.transition = 'none';
+      stack.style.transition = 'none';
       targetEl.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'start' });
-      pageStackEl.style.transform = `translateX(${slideIn})`;
-      void pageStackEl.offsetHeight; // force reflow so the next transition takes
+      stack.style.transform = `translateX(${slideIn})`;
+      void stack.offsetHeight; // force reflow so the next transition takes
 
-      pageStackEl.style.transition = `transform ${DURATION}ms ease-out`;
-      pageStackEl.style.transform = 'translateX(0)';
+      stack.style.transition = `transform ${DURATION}ms ease-out`;
+      stack.style.transform = 'translateX(0)';
       await new Promise(r => setTimeout(r, DURATION));
     } finally {
-      pageStackEl.style.transition = '';
-      pageStackEl.style.willChange = '';
-      pageStackEl.style.transform = '';
+      stack.style.transition = '';
+      stack.style.willChange = '';
+      stack.style.transform = '';
       flipping = false;
     }
   }
