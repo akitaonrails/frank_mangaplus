@@ -8,6 +8,8 @@
     markChapterRead,
     getPageMode,
     setPageMode,
+    getPageModeForTitle,
+    setPageModeForTitle,
     nextPageMode,
     getLastReadPage,
     setLastReadPage,
@@ -394,6 +396,7 @@
         return;
       }
       const v = result.viewer;
+      pageMode = getPageModeForTitle(v.titleId);
       initialViewer = v;
       // The manga_viewer_v3 response's `chapters` field is NOT the full
       // chapter list — for most titles past chapter 3-ish it's truncated
@@ -693,7 +696,8 @@
 
   async function togglePageMode() {
     pageMode = nextPageMode(pageMode);
-    setPageMode(pageMode);
+    if (initialViewer?.titleId) setPageModeForTitle(initialViewer.titleId, pageMode);
+    else setPageMode(pageMode);
     // After regrouping, settle on the group that contains the page the
     // user was just on, so the toggle doesn't visually jump them.
     // await tick() flushes the pageGroups recomputation + frame

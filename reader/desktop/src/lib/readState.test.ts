@@ -8,6 +8,8 @@ import {
   setSortDescending,
   getPageMode,
   setPageMode,
+  getPageModeForTitle,
+  setPageModeForTitle,
   nextPageMode,
   getLastReadPage,
   setLastReadPage,
@@ -98,6 +100,25 @@ describe('readState', () => {
   it('page mode treats unknown values as single', () => {
     localStorage.setItem('mp:pageMode', 'triple');
     expect(getPageMode()).toBe('single');
+  });
+
+  it('page mode can be stored per title with global fallback', () => {
+    setPageMode('double');
+    expect(getPageModeForTitle(100)).toBe('double');
+
+    setPageModeForTitle(100, 'double-cover');
+    setPageModeForTitle(200, 'single');
+
+    expect(getPageModeForTitle(100)).toBe('double-cover');
+    expect(getPageModeForTitle(200)).toBe('single');
+    expect(getPageModeForTitle(300)).toBe('single');
+  });
+
+  it('per-title page mode ignores unknown stored values and falls back', () => {
+    setPageMode('double');
+    localStorage.setItem('mp:pageMode:42', 'spread');
+
+    expect(getPageModeForTitle(42)).toBe('double');
   });
 
   it('nextPageMode cycles single → double → double-cover → single', () => {

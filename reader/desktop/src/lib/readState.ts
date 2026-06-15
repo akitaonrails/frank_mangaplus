@@ -3,6 +3,7 @@
 // Storage shape:
 //   mp:read:<titleId>    → JSON array of read chapterIds (deduped)
 //   mp:last:<titleId>    → JSON { chapterId, t } for "continue reading"
+//   mp:pageMode:<titleId> → reader page layout for that title
 //
 // All ops are sync and safe to call from Svelte effects; localStorage is
 // available in the Tauri WebView (it's webkit / wry).
@@ -93,14 +94,32 @@ export function setSortDescending(v: boolean) {
 //                       page and the binding starts on the next spread)
 export type PageMode = 'single' | 'double' | 'double-cover';
 const KEY_PAGE_MODE = 'mp:pageMode';
-export function getPageMode(): PageMode {
-  const v = localStorage.getItem(KEY_PAGE_MODE);
+const KEY_TITLE_PAGE_MODE = (titleId: number) => `mp:pageMode:${titleId}`;
+function parsePageMode(v: string | null): PageMode | null {
   if (v === 'double') return 'double';
   if (v === 'double-cover') return 'double-cover';
-  return 'single';
+  if (v === 'single') return 'single';
+  return null;
+}
+export function getPageMode(): PageMode {
+  return parsePageMode(localStorage.getItem(KEY_PAGE_MODE)) ?? 'single';
 }
 export function setPageMode(mode: PageMode) {
   localStorage.setItem(KEY_PAGE_MODE, mode);
+}
+export function getPageModeForTitle(titleId: number): PageMode {
+  if (!Number.isFinite(titleId)) return getPageMode();
+  return parsePageMode(localStorage.getItem(KEY_TITLE_PAGE_MODE(titleId))) ?? getPageMode();
+}
+export function setPageModeForTitle(titleId: number, mode: PageMode) {
+  if (!Number.isFinite(titleId)) {
+    setPageMode(mode);
+    return;
+  }
+  localStorage.setItem(KEY_TITLE_PAGE_MODE(titleId), mode);
+  // Keep the global preference as the default for titles without an
+  // explicit saved layout, while still allowing every title to override it.
+  setPageMode(mode);
 }
 // Cycle order driven by the D key / toggle button: single → double →
 // double-cover → single.
