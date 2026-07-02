@@ -318,6 +318,32 @@ mod tests {
     }
 
     #[test]
+    fn ipc_payloads_serialize_camel_case() {
+        // The TS side (src/lib/types.ts) declares camelCase keys; the
+        // proto-generated types get that from build.rs, but these two
+        // hand-written structs need the serde attribute themselves.
+        // Without it `payload.titleCount` reads undefined at runtime.
+        let payload = super::AllTitlesPayload {
+            titles: vec![],
+            source: "fresh".to_string(),
+            fetched_at_secs: 42,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"fetchedAtSecs\":42"), "got: {json}");
+
+        let event = super::AllTitlesRefreshedEvent {
+            lang: "eng".to_string(),
+            clang: "eng".to_string(),
+            title_count: 7,
+            fetched_at_secs: 42,
+            titles: vec![],
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"titleCount\":7"), "got: {json}");
+        assert!(json.contains("\"fetchedAtSecs\":42"), "got: {json}");
+    }
+
+    #[test]
     fn env_wins_over_file() {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         write!(tmp, "from-file").unwrap();
@@ -585,7 +611,11 @@ fn serve_from_cache(
 /// Payload returned by [`get_all_titles_cached`]. `source` lets the
 /// frontend distinguish the SWR cases (fresh / stale / network) without
 /// having to read disk timestamps itself.
+///
+/// camelCase to match the proto-generated types (build.rs applies the
+/// same attribute) and the TS `AllTitlesPayload` in src/lib/types.ts.
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AllTitlesPayload {
     titles: Vec<proto::Title>,
     source: String,
@@ -783,7 +813,10 @@ fn spawn_refresh(
     });
 }
 
+// camelCase to match the TS `AllTitlesRefreshedEvent` in
+// src/lib/types.ts — the search page reads `payload.titleCount`.
 #[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct AllTitlesRefreshedEvent {
     lang: String,
     clang: String,
