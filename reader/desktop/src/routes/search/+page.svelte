@@ -7,8 +7,8 @@
     Title,
     AllTitlesPayload,
     AllTitlesRefreshedEvent,
-    SubscribedTitlesView,
   } from '$lib/types';
+  import { getFavorites, addFavorite as ipcAddFavorite } from '$lib/ipcCommands';
   import TitleCard from '$lib/TitleCard.svelte';
   import { DEFAULT_LANG, DEFAULT_CLANG } from '$lib/lang';
   import {
@@ -108,7 +108,7 @@
       lang: activeLang,
       clang: activeClang,
     }));
-    const libP = withIpcTimeout(invoke<SubscribedTitlesView>('get_favorites'));
+    const libP = withIpcTimeout(getFavorites());
 
     try {
       const view = await curatedP;
@@ -177,7 +177,7 @@
     if (buttonState.get(title.titleId) === 'pending') return; // in flight
     buttonState = new Map(buttonState).set(title.titleId, 'pending');
     try {
-      await invoke<void>('add_favorite', { titleId: title.titleId });
+      await withIpcTimeout(ipcAddFavorite(title.titleId));
       // Optimistic library add — the next /favorites poll would
       // confirm it; meanwhile the button flips to ✓ In Library.
       libraryIds = new Set(libraryIds).add(title.titleId);

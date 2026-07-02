@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import type { SubscribedTitlesView, Title } from '$lib/types';
+  import type { Title } from '$lib/types';
   import TitleCard from '$lib/TitleCard.svelte';
   import { langCode } from '$lib/lang';
   import { withIpcTimeout } from '$lib/ipcTimeout';
+  import { getFavorites } from '$lib/ipcCommands';
 
   let loading = $state(true);
   let error = $state('');
@@ -18,7 +18,7 @@
     loading = true;
     error = '';
     try {
-      const view = await withIpcTimeout(invoke<SubscribedTitlesView>('get_favorites'));
+      const view = await withIpcTimeout(getFavorites());
       titles = view.titles ?? [];
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);

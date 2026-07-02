@@ -3,7 +3,7 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import type { MangaViewer, MangaPage, Chapter, TitleDetailView } from '$lib/types';
+  import type { MangaViewer, MangaPage, Chapter } from '$lib/types';
   import {
     markChapterRead,
     getPageMode,
@@ -36,6 +36,7 @@
   import { proxied } from '$lib/img';
   import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
   import { withIpcTimeout } from '$lib/ipcTimeout';
+  import { getTitleDetail } from '$lib/ipcCommands';
 
   /** Immutable Set update helpers — Svelte 5 needs a new reference to
    *  notice the change, and `new Set(old).add(x)` was repeated in 6+
@@ -420,7 +421,7 @@
       // Kick off title_detail in the background to get the authoritative
       // chapter list. Doesn't block the user seeing the first pages.
       if (v.titleId) {
-        void withIpcTimeout(invoke<TitleDetailView>('get_title_detail', {
+        void withIpcTimeout(getTitleDetail({
           titleId: v.titleId,
           lang: activeLang,
           clang: activeClang,
