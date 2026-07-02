@@ -35,5 +35,6 @@
 - Use `src/lib/img.ts` `proxied(...)` for CDN image URLs. Do not rename it to `img`; that name previously broke Svelte 5 style extraction/PostCSS in dev mode.
 - `MANGAPLUS_SECRET` overrides the on-disk secret. Without an env/config secret, startup auto-registers a free-tier device and writes local config under the platform config dir.
 - Image/cache data lives under XDG-style cache dirs such as `~/.cache/mangaplus-reader/`; local secret/render config lives under `~/.config/mangaplus-reader/` on Linux.
+- The full-catalog SWR cache (`all_titles_<lang>_<clang>.bin` + `.meta.json` in the cache dir) defaults to a 24h TTL; `MANGAPLUS_CATALOG_TTL_HOURS=N` overrides it.
 - Linux render mode is decided before WebKit starts: `MANGAPLUS_RENDER_MODE` wins, then `~/.config/mangaplus-reader/render.conf`, then crash-recovery marker, then GPU/display auto-detect. See `docs/troubleshooting.md` before changing this path.
 - For UI/Svelte route changes, run a dev-server check or `./verify.sh`; production build alone may not catch style-chunk extraction failures.
