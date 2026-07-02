@@ -420,16 +420,10 @@ fn auto_register_secret() -> String {
     }
 }
 
-/// XDG cache dir for the app's image cache. Falls back to ~/.cache then
-/// to a tempdir. Created on first write by fetch_image.
+/// XDG cache dir for the app's image cache. Created on first write by
+/// fetch_image. Same directory the catalog cache uses — one derivation.
 fn image_cache_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        return PathBuf::from(xdg).join("mangaplus-reader");
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".cache/mangaplus-reader");
-    }
-    std::env::temp_dir().join("mangaplus-reader")
+    all_titles_cache::cache_dir()
 }
 
 // ---------- commands ----------

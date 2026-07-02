@@ -39,7 +39,8 @@ pub struct CacheMeta {
 }
 
 /// XDG cache dir for `mangaplus-reader`. Falls back through XDG_CACHE_HOME
-/// → ~/.cache → tempdir. Mirrors `image_cache_dir` in lib.rs.
+/// → ~/.cache → tempdir. Single source for the cache root — lib.rs's
+/// `image_cache_dir` delegates here.
 pub fn cache_dir() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
         return PathBuf::from(xdg).join("mangaplus-reader");
