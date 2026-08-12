@@ -5,9 +5,15 @@
 //! out the expected typed payload. No network access — these run in
 //! `cargo test` and are deterministic.
 //!
-//! To capture a new fixture:
-//!   curl -sS -o reader/api/tests/fixtures/<name>.bin \
-//!     "https://jumpg-api.tokyo-cdn.com/api/<path>?os=android&os_ver=33&app_ver=250&secret=$MANGAPLUS_SECRET&..."
+//! To capture a new fixture without exposing the device secret in shell
+//! history, pass it to curl from its local config file:
+//!   curl --silent --show-error --get \
+//!     --output reader/api/tests/fixtures/<name>.bin \
+//!     --data-urlencode "secret@/path/to/mangaplus-reader/secret" \
+//!     --data-urlencode "os=android" --data-urlencode "os_ver=36" \
+//!     --data-urlencode "app_ver=250" --data-urlencode "lang=eng" \
+//!     --data-urlencode "clang=<code>" \
+//!     "https://jumpg-api.tokyo-cdn.com/api/title_list/search"
 
 use mangaplus_api::proto::{self, response, success_result};
 use prost::Message;
@@ -26,6 +32,14 @@ fn extract_data(bytes: &[u8]) -> success_result::Data {
 }
 
 const SEARCH_ENG: &[u8] = include_bytes!("fixtures/search_eng.bin");
+const SEARCH_ESP: &[u8] = include_bytes!("fixtures/search_esp.bin");
+const SEARCH_FRA: &[u8] = include_bytes!("fixtures/search_fra.bin");
+const SEARCH_IND: &[u8] = include_bytes!("fixtures/search_ind.bin");
+const SEARCH_PTB: &[u8] = include_bytes!("fixtures/search_ptb.bin");
+const SEARCH_RUS: &[u8] = include_bytes!("fixtures/search_rus.bin");
+const SEARCH_THA: &[u8] = include_bytes!("fixtures/search_tha.bin");
+const SEARCH_VIE: &[u8] = include_bytes!("fixtures/search_vie.bin");
+const SEARCH_DEU: &[u8] = include_bytes!("fixtures/search_deu.bin");
 const PROFILE: &[u8] = include_bytes!("fixtures/profile.bin");
 const ERROR_INVALID_PARAMETER: &[u8] = include_bytes!("fixtures/error_invalid_parameter.bin");
 const ERROR_SUBSCRIPTION_LOCKED: &[u8] = include_bytes!("fixtures/error_subscription_locked.bin");
@@ -70,7 +84,13 @@ fn title_detail_one_piece_has_chapter_list_v2() {
         _ => panic!("expected TitleDetailView (field 8)"),
     };
     assert!(view.title.is_some(), "title field 1 must be set");
-    assert_eq!(view.title.as_ref().unwrap().title_id, 100020, "One Piece title_id mismatch");
+    let title = view.title.as_ref().unwrap();
+    assert_eq!(title.title_id, 100020, "One Piece title_id mismatch");
+    assert_eq!(
+        title.language,
+        mangaplus_api::lang::wire_enum(mangaplus_api::lang::ENGLISH),
+        "title detail must identify the requested content language"
+    );
     assert!(
         !view.chapter_list_v2.is_empty(),
         "expected chapter_list_v2 (field 38) populated for One Piece"
@@ -192,6 +212,52 @@ fn search_eng_decodes() {
 
     // English search catalog should have at least one "contents" section.
     assert!(!view.contents.is_empty(), "expected non-empty contents");
+}
+
+#[test]
+fn translated_search_fixtures_confirm_content_language_wire_enums() {
+    use mangaplus_api::lang;
+    use std::collections::BTreeSet;
+
+    // Each response was captured from /title_list/search with the matching
+    // clang. This ties the production constants to language enum values
+    // observed on the wire instead of relying only on synthetic Title values.
+    let fixtures: [(&str, &[u8]); 9] = [
+        (lang::ENGLISH, SEARCH_ENG),
+        (lang::SPANISH, SEARCH_ESP),
+        (lang::FRENCH, SEARCH_FRA),
+        (lang::INDONESIAN, SEARCH_IND),
+        (lang::PORTUGUESE_BR, SEARCH_PTB),
+        (lang::RUSSIAN, SEARCH_RUS),
+        (lang::THAI, SEARCH_THA),
+        (lang::VIETNAMESE, SEARCH_VIE),
+        (lang::GERMAN, SEARCH_DEU),
+    ];
+
+    for (clang, fixture) in fixtures {
+        let data = extract_data(fixture);
+        let view = match data {
+            success_result::Data::SearchView(v) => v,
+            other => panic!(
+                "expected SearchView for clang={clang}, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        };
+        let titles: Vec<&proto::Title> = view
+            .contents
+            .iter()
+            .filter_map(|content| content.title_list.as_ref())
+            .flat_map(|list| list.featured_titles.iter())
+            .collect();
+        assert!(!titles.is_empty(), "empty search fixture for clang={clang}");
+
+        let observed: BTreeSet<i32> = titles.iter().map(|title| title.language).collect();
+        let expected = BTreeSet::from([lang::wire_enum(clang)]);
+        assert_eq!(
+            observed, expected,
+            "search fixture contains unexpected language enums for clang={clang}"
+        );
+    }
 }
 
 #[test]
