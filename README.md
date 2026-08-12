@@ -44,6 +44,7 @@ Press `D` (or click the layout icon in the header) and the reader pairs facing p
 ![Double-page spread on a widescreen monitor](docs/screenshots/reader-double-page.png)
 
 Three layouts cycle on the toggle:
+
 - **single** — one page at a time
 - **double** — sequential pairs from page 1
 - **double-cover** — first page of each chapter solo, then pairs (matches printed manga where the cover binds singly before the first spread)
@@ -59,6 +60,18 @@ Press `F` (or click the crescent-moon icon in the header) to warm the page white
 Four levels cycle on the toggle: **off → low → med → high → off**. The button tints amber and shows one to three dots to indicate the active level. Persisted in localStorage like the other reader prefs.
 
 Implemented as a CSS `sepia + brightness + saturate` filter on the whole page-stack — sepia shifts the hue toward amber while preserving the luminance range, so blacks stay black and the artwork's contrast is intact.
+
+### Content languages
+
+Use the header buttons to choose any combination of **EN**, **ESP**, **FRA**, **IND**, **PT-BR**, **RUS**, **THA**, **VIE**, and **DEU**. English is selected by default, at least one language must remain active, and the selection persists across sessions. Non-English editions have a badge on their cover.
+
+Search combines the selected catalogs in the fixed order shown in the header. Editions with the same title are grouped in that order, regardless of which button was activated first. With **EN** and **PT-BR** selected, for example, the English edition appears immediately before its Brazilian Portuguese edition. An empty query shows curated titles; typing searches the full selected catalogs.
+
+![Search with English and Brazilian Portuguese catalogs active](docs/screenshots/search-en-pt-br.png)
+
+The same filter and ordering apply to **Library**. In the Search example, both editions of _One Piece_ are in the Library; with only **PT-BR** active below, only the Portuguese edition remains visible. The English favorite is hidden, not removed, and reappears when **EN** is selected again.
+
+![Library filtered to Brazilian Portuguese titles](docs/screenshots/library-pt-br-only.png)
 
 ---
 
@@ -97,7 +110,7 @@ On first launch the app calls the official `/register` endpoint and is issued a 
 
 ## What's in it
 
-A library view of your bookmarked titles. The search page hits the full English catalog and filters locally as you type.
+A library view of your bookmarked titles. The search page loads the catalogs for whichever content languages you selected in the header and filters locally as you type.
 
 Title detail shows the banner art, the synopsis, and the full chapter list. The list is virtualized, so a series with a thousand chapters scrolls fine. There's a sort toggle, and a "Continue ▶" button that jumps to the last chapter you opened.
 
