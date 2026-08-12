@@ -8,6 +8,7 @@
 // "given (state, input) compute label" lives here.
 
 import type { SearchView, Title } from '$lib/types';
+import type { ContentLanguage } from '$lib/lang';
 
 /** State of the inline "+ Library" button, per title. Mirrors the
  *  shape used inside the search page; centralising it here keeps the
@@ -17,6 +18,21 @@ export type FavButtonState = 'pending' | 'error' | undefined;
 /** Default visible row cap on the search grid. Re-exported as a
  *  constant so tests don't have to import the page module. */
 export const DEFAULT_VISIBLE_CAP = 80;
+
+/**
+ * Merge the snapshots returned by an in-flight full-catalog request with
+ * catalog entries already written after that request started. The current
+ * entries win: they can contain a newer SWR refresh event and must never be
+ * replaced by the stale snapshot that originally triggered the refresh.
+ */
+export function mergePendingCatalogSnapshots<T>(
+  current: ReadonlyMap<ContentLanguage, T[]>,
+  pending: readonly (readonly [ContentLanguage, T[]])[],
+): Map<ContentLanguage, T[]> {
+  const merged = new Map<ContentLanguage, T[]>(pending);
+  for (const [code, titles] of current) merged.set(code, titles);
+  return merged;
+}
 
 /**
  * Flatten a curated /title_list/search SearchView into a deduplicated

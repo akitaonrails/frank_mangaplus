@@ -5,6 +5,11 @@
   import { page } from '$app/stores';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SecretSetup from '$lib/SecretSetup.svelte';
+  import { CONTENT_LANGUAGES } from '$lib/lang';
+  import {
+    contentLanguages,
+    toggleContentLanguage,
+  } from '$lib/contentLanguagePreference';
 
   let { children } = $props();
 
@@ -43,6 +48,25 @@
       <a href="/" class:active={$page.url.pathname === '/'}>Library</a>
       <a href="/search" class:active={$page.url.pathname === '/search'}>Search</a>
     </nav>
+    <div class="content-language-picker" aria-label="Content languages">
+      <span class="picker-label">Content</span>
+      {#each CONTENT_LANGUAGES as language}
+        {@const selected = $contentLanguages.includes(language.code)}
+        {@const required = selected && $contentLanguages.length === 1}
+        <button
+          type="button"
+          class:selected
+          aria-pressed={selected}
+          disabled={required}
+          title={required
+            ? `${language.label} is the only active content language`
+            : `${selected ? 'Hide' : 'Show'} ${language.label} manga`}
+          onclick={() => toggleContentLanguage(language.code)}
+        >
+          {language.badge}
+        </button>
+      {/each}
+    </div>
     <a
       href={REPO_URL}
       class="github-link"
@@ -118,6 +142,52 @@
     border-bottom-color: var(--accent);
   }
 
+  .content-language-picker {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding-left: 8px;
+    border-left: 1px solid var(--border);
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .picker-label {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    margin-right: 2px;
+  }
+
+  .content-language-picker button {
+    flex-shrink: 0;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.66rem;
+    font-weight: 700;
+    line-height: 1;
+    padding: 5px 8px;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+
+  .content-language-picker button:hover {
+    border-color: var(--text-muted);
+    color: var(--text);
+  }
+
+  .content-language-picker button:disabled {
+    cursor: default;
+  }
+
+  .content-language-picker button.selected {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
   .github-link {
     margin-left: auto;
     display: flex;
@@ -129,6 +199,22 @@
 
   .github-link:hover {
     color: var(--text);
+  }
+
+  @media (max-width: 620px) {
+    .app-header {
+      gap: 12px;
+      padding: 0 10px;
+    }
+
+    nav {
+      gap: 10px;
+    }
+
+    .picker-label,
+    .github-link {
+      display: none;
+    }
   }
 
   .page-shell {

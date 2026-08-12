@@ -10,7 +10,16 @@
   } from '$lib/types';
   import { getFavorites, addFavorite as ipcAddFavorite } from '$lib/ipcCommands';
   import TitleCard from '$lib/TitleCard.svelte';
-  import { DEFAULT_LANG, DEFAULT_CLANG } from '$lib/lang';
+  import {
+    contentLanguagesInNavbarOrder,
+    DEFAULT_LANG,
+    filterByContentLanguages,
+    isContentLanguage,
+    mergeTitles,
+    titleHref,
+    type ContentLanguage,
+  } from '$lib/lang';
+  import { contentLanguages } from '$lib/contentLanguagePreference';
   import {
     flattenSearchView,
     filterTitles,
@@ -18,6 +27,7 @@
     computeButtonLabel,
     buttonDisabled,
     clearFavoriteErrorState,
+    mergePendingCatalogSnapshots,
     DEFAULT_VISIBLE_CAP,
   } from '$lib/searchLogic';
   import { withIpcTimeout } from '$lib/ipcTimeout';
@@ -31,6 +41,7 @@
   //     stays light. Once loaded, all subsequent filtering uses it.
   let curated: Title[] = $state([]);
   let full: Title[] = $state([]);
+  let fullByLanguage: Map<ContentLanguage, Title[]> = $state(new Map());
   // $state() infers the literal type ('idle') from the initializer unless
   // we widen it explicitly via the generic. Without the generic, later
   // assignments to 'loading'/'ready' fail svelte-check with "types
@@ -63,15 +74,18 @@
 
   let unlisten: UnlistenFn | null = null;
   let alive = true;
+  let mounted = $state(false);
+  let localeLoadSeq = 0;
   const favoriteResetTimers = new Map<number, ReturnType<typeof setTimeout>>();
-  // Locale currently in effect for this page session. Captured once at
-  // mount so every IPC and every refresh-event filter agrees, even if
-  // the module-level DEFAULT_LANG ever becomes user-configurable.
-  // Matching on these (not on the module constant) means a future
-  // language-switcher won't drop the in-flight refresh event for the
-  // previous locale.
-  const activeLang = DEFAULT_LANG;
-  const activeClang = DEFAULT_CLANG;
+
+  function combineSelected(
+    byLanguage: Map<ContentLanguage, Title[]>,
+    selected: readonly ContentLanguage[],
+  ): Title[] {
+    return mergeTitles(
+      contentLanguagesInNavbarOrder(selected).map(code => byLanguage.get(code) ?? []),
+    );
+  }
 
   onMount(() => {
     // Register the SWR refresh listener before any catalog fetch can
@@ -80,13 +94,21 @@
     void listen<AllTitlesRefreshedEvent>(
       'all_titles_refreshed',
       ev => {
-        if (ev.payload.lang !== activeLang || ev.payload.clang !== activeClang) {
+        if (
+          fullStatus === 'idle' ||
+          ev.payload.lang !== DEFAULT_LANG ||
+          !isContentLanguage(ev.payload.clang) ||
+          !$contentLanguages.includes(ev.payload.clang)
+        ) {
           return;
         }
-        full = ev.payload.titles ?? [];
+        const code = ev.payload.clang;
+        const titles = filterByContentLanguages(ev.payload.titles ?? [], [code]);
+        fullByLanguage = new Map(fullByLanguage).set(code, titles);
+        full = combineSelected(fullByLanguage, $contentLanguages);
         fullStatus = 'ready';
         catalogSource = 'fresh (refreshed)';
-        console.log(`[search] catalog refreshed: ${ev.payload.titleCount} titles`);
+        console.log(`[search] ${code} catalog refreshed: ${ev.payload.titleCount} titles`);
       },
     ).then(fn => {
       if (alive) unlisten = fn;
@@ -95,38 +117,80 @@
       console.warn('[search] all_titles_refreshed listener failed:', e);
     });
 
-    void loadCuratedAndLibrary();
+    mounted = true;
   });
 
-  async function loadCuratedAndLibrary() {
+  $effect(() => {
+    const selected = [...$contentLanguages];
+    if (!mounted) return;
+    void loadCuratedAndLibrary(selected);
+  });
+
+  async function loadCuratedAndLibrary(selected: ContentLanguage[] = [...$contentLanguages]) {
+    const seq = ++localeLoadSeq;
     loading = true;
     error = '';
+    curated = [];
+    full = [];
+    fullByLanguage = new Map();
+    fullStatus = 'idle';
+    catalogSource = '';
     // Parallel fetches: curated catalog (fast) + library set (for
     // already-in-library indicators). Either can fail independently
     // without blocking the other.
-    const curatedP = withIpcTimeout(invoke<SearchView>('search', {
-      lang: activeLang,
-      clang: activeClang,
+    const curatedP = Promise.allSettled(selected.map(async code => {
+      const view = await withIpcTimeout(invoke<SearchView>('search', {
+        lang: DEFAULT_LANG,
+        clang: code,
+      }));
+      return [code, filterByContentLanguages(flattenSearchView(view), [code])] as const;
     }));
-    const libP = withIpcTimeout(getFavorites());
+    // Attach both handlers immediately so a locale switch cannot leave a
+    // rejected, no-longer-awaited favorites request behind.
+    const libP = withIpcTimeout(getFavorites()).then(
+      view => ({ view, error: null }),
+      error => ({ view: null, error }),
+    );
 
     try {
-      const view = await curatedP;
-      if (!alive) return;
-      curated = flattenSearchView(view);
+      const results = await curatedP;
+      if (!alive || seq !== localeLoadSeq) return;
+      const successful = results
+        .filter((result): result is PromiseFulfilledResult<readonly [ContentLanguage, Title[]]> => result.status === 'fulfilled')
+        .map(result => result.value);
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.warn('[search] curated language fetch failed:', result.reason);
+        }
+      }
+      if (successful.length === 0) {
+        const firstError = results.find(result => result.status === 'rejected');
+        throw firstError && firstError.status === 'rejected'
+          ? firstError.reason
+          : new Error('No content language catalog could be loaded.');
+      }
+      const byLanguage = new Map(successful);
+      curated = combineSelected(byLanguage, selected);
     } catch (e) {
-      if (!alive) return;
+      if (!alive || seq !== localeLoadSeq) return;
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      if (alive) loading = false;
+      if (alive && seq === localeLoadSeq) loading = false;
     }
 
-    try {
-      const libView = await libP;
-      if (!alive) return;
-      libraryIds = new Set((libView.titles ?? []).map(t => t.titleId));
-    } catch (e) {
-      console.warn('[search] library fetch failed (button state will degrade):', e);
+    const libraryResult = await libP;
+    if (!alive || seq !== localeLoadSeq) return;
+    if (libraryResult.view) {
+      libraryIds = new Set((libraryResult.view.titles ?? []).map(t => t.titleId));
+    } else {
+      console.warn(
+        '[search] library fetch failed (button state will degrade):',
+        libraryResult.error,
+      );
+    }
+
+    if (alive && seq === localeLoadSeq && query.trim().length > 0) {
+      void loadFullCatalogIfNeeded(selected, seq);
     }
   }
 
@@ -141,20 +205,52 @@
    *  types; subsequent calls are no-ops because fullStatus !== 'idle'.
    *  The Rust side handles SWR cache reads + the two-bucket merge —
    *  this returns immediately if there's a warm cache. */
-  async function loadFullCatalogIfNeeded() {
+  async function loadFullCatalogIfNeeded(
+    selected: ContentLanguage[] = [...$contentLanguages],
+    seq = localeLoadSeq,
+  ) {
     if (fullStatus !== 'idle') return;
     fullStatus = 'loading';
     try {
-      const payload = await withIpcTimeout(invoke<AllTitlesPayload>('get_all_titles_cached', {
-        lang: activeLang,
-        clang: activeClang,
+      const results = await Promise.allSettled(selected.map(async code => {
+        const payload = await withIpcTimeout(invoke<AllTitlesPayload>('get_all_titles_cached', {
+          lang: DEFAULT_LANG,
+          clang: code,
+        }));
+        const titles = filterByContentLanguages(payload.titles ?? [], [code]);
+        return [code, titles, payload.source] as const;
       }));
-      if (!alive) return;
-      full = payload.titles ?? [];
+      if (!alive || seq !== localeLoadSeq) return;
+      const successful = results
+        .filter((result): result is PromiseFulfilledResult<readonly [ContentLanguage, Title[], AllTitlesPayload['source']]> => result.status === 'fulfilled')
+        .map(result => result.value);
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.warn('[search] full language catalog fetch failed:', result.reason);
+        }
+      }
+      if (successful.length === 0) {
+        throw new Error('No full content language catalog could be loaded.');
+      }
+      // While Promise.allSettled was waiting for every language, an SWR
+      // refresh event may already have replaced one language with fresher
+      // titles. Preserve those current entries instead of overwriting them
+      // with the stale snapshots that originally triggered the refresh.
+      const refreshedCodes = new Set(fullByLanguage.keys());
+      fullByLanguage = mergePendingCatalogSnapshots(
+        fullByLanguage,
+        successful.map(([code, titles]) => [code, titles] as const),
+      );
+      full = combineSelected(fullByLanguage, selected);
       fullStatus = 'ready';
-      catalogSource = payload.source;
+      const sources = new Set<string>();
+      if (refreshedCodes.size > 0) sources.add('fresh (refreshed)');
+      for (const [code, , source] of successful) {
+        if (!refreshedCodes.has(code)) sources.add(source);
+      }
+      catalogSource = [...sources].join(' + ');
       console.log(
-        `[search] full catalog loaded (${full.length} titles, source=${payload.source})`,
+        `[search] full catalog loaded (${full.length} titles, source=${catalogSource})`,
       );
     } catch (e) {
       // Network failed AND no cache exists → fall back to curated.
@@ -162,7 +258,7 @@
       // still works against the curated set; the user just sees a
       // smaller match space.
       console.warn('[search] full catalog fetch failed; staying on curated:', e);
-      fullStatus = 'idle';
+      if (alive && seq === localeLoadSeq) fullStatus = 'idle';
     }
   }
 
@@ -239,7 +335,7 @@
   {:else}
     <div class="title-grid">
       {#each visible as title (title.titleId)}
-        <TitleCard {title}>
+        <TitleCard {title} href={titleHref(title)}>
           {#snippet action()}
             {@const inLibrary = libraryIds.has(title.titleId)}
             {@const st = buttonState.get(title.titleId)}
