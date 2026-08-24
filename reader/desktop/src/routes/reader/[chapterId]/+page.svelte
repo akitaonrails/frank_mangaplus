@@ -314,6 +314,71 @@
   let chapterPageCount = $derived(chapterBounds.count);
   let pageInChapter = $derived(currentPageIndex - currentChapterFirstIndex + 1);
 
+  // ---------- auto-hide bars ----------
+
+  // The header and footer overlay the page (position: fixed) so the
+  // page frames get the full window height. Both bars collapse
+  // BAR_HIDE_DELAY_MS after mount, and again after the pointer leaves
+  // them. Moving the mouse into the window's very top / very bottom
+  // edge slides the corresponding bar back in over the page.
+  //
+  // Edge detection runs on a window mousemove listener instead of
+  // invisible hover <div>s pinned to the edges — overlay divs would
+  // swallow clicks meant for the page-turn click zones in that strip.
+  const BAR_HIDE_DELAY_MS = 2000;
+  // Reveal strip at each window edge while the bar is hidden.
+  const BAR_EDGE_ZONE_PX = 24;
+  // While a bar is visible, the whole bar area counts as "hovering it"
+  // so it doesn't collapse under the user's pointer mid-click.
+  const HEADER_HEIGHT_PX = 48;
+  const FOOTER_HEIGHT_PX = 32;
+
+  let topBarVisible = $state(true);
+  let bottomBarVisible = $state(true);
+  const barHideTimers: { top?: ReturnType<typeof setTimeout>; bottom?: ReturnType<typeof setTimeout> } = {};
+
+  function showBar(bar: 'top' | 'bottom') {
+    clearTimeout(barHideTimers[bar]);
+    barHideTimers[bar] = undefined;
+    if (bar === 'top') topBarVisible = true;
+    else bottomBarVisible = true;
+  }
+
+  function scheduleBarHide(bar: 'top' | 'bottom') {
+    clearTimeout(barHideTimers[bar]);
+    barHideTimers[bar] = setTimeout(() => {
+      barHideTimers[bar] = undefined;
+      if (bar === 'top') topBarVisible = false;
+      else bottomBarVisible = false;
+    }, BAR_HIDE_DELAY_MS);
+  }
+
+  function onBarMouseMove(e: MouseEvent) {
+    // Inside the bar (visible) or the reveal strip (hidden): keep/make
+    // it visible, cancelling any pending hide. Outside: arm the hide
+    // timer once — NOT on every move, or continuous mouse motion in
+    // the middle of the page would keep resetting the countdown and
+    // the bars would never collapse.
+    if (e.clientY <= (topBarVisible ? HEADER_HEIGHT_PX : BAR_EDGE_ZONE_PX)) {
+      showBar('top');
+    } else if (topBarVisible && barHideTimers.top == null) {
+      scheduleBarHide('top');
+    }
+    const fromBottom = window.innerHeight - e.clientY;
+    if (fromBottom <= (bottomBarVisible ? FOOTER_HEIGHT_PX : BAR_EDGE_ZONE_PX)) {
+      showBar('bottom');
+    } else if (bottomBarVisible && barHideTimers.bottom == null) {
+      scheduleBarHide('bottom');
+    }
+  }
+
+  function clearBarHideTimers() {
+    clearTimeout(barHideTimers.top);
+    clearTimeout(barHideTimers.bottom);
+    barHideTimers.top = undefined;
+    barHideTimers.bottom = undefined;
+  }
+
   // ---------- load ----------
 
   let loadSeq = 0;
@@ -322,8 +387,13 @@
     pageMode = getPageMode();
     eyeFilter = getEyeFilter();
     window.addEventListener('keydown', onKey);
+    window.addEventListener('mousemove', onBarMouseMove);
+    // Bars start visible so the user can orient, then collapse.
+    scheduleBarHide('top');
+    scheduleBarHide('bottom');
     return () => {
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousemove', onBarMouseMove);
       observer?.disconnect();
     };
   });
@@ -331,6 +401,7 @@
   onDestroy(() => {
     observer?.disconnect();
     clearImageRetryTimers();
+    clearBarHideTimers();
   });
 
   function clearImageRetryTimers() {
@@ -832,7 +903,7 @@
 </svelte:head>
 
 <div class="reader">
-  <header class="reader-header">
+  <header class="reader-header" class:hidden={!topBarVisible}>
     <button class="back-btn" onclick={goBack}>← Back</button>
     {#if initialViewer}
       <span class="reader-title">{initialViewer.titleName}</span>
@@ -1062,7 +1133,7 @@
   </main>
 
   {#if !loading && loadedPages.length > 0}
-    <footer class="reader-footer">
+    <footer class="reader-footer" class:hidden={!bottomBarVisible}>
       <!-- Bar fills from the right edge to reflect manga RTL reading direction. -->
       <div
         class="progress-bar"
@@ -1077,17 +1148,23 @@
 
 <style>
   .reader {
-    display: flex;
-    flex-direction: column;
     height: 100vh;
     background: #111;
   }
 
+  /* Header and footer are fixed overlays on top of the page (which
+     takes the full window height) and slide off-screen when hidden.
+     The auto-hide state machine lives in the script block: collapse
+     2s after mount / after the pointer leaves, reveal on hovering the
+     window's top/bottom edge. */
   .reader-header {
-    position: sticky;
+    position: fixed;
     top: 0;
+    left: 0;
+    right: 0;
     z-index: 100;
     height: 48px;
+    transition: transform 0.25s ease;
     background: rgba(10, 10, 10, 0.92);
     backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--border);
@@ -1097,6 +1174,10 @@
     padding: 0 16px;
     font-size: 0.85rem;
     flex-shrink: 0;
+  }
+
+  .reader-header.hidden {
+    transform: translateY(-100%);
   }
 
   .back-btn {
@@ -1215,7 +1296,7 @@
   }
 
   .reader-main {
-    flex: 1;
+    height: 100vh;
     overflow-y: auto;
     scroll-behavior: smooth;
     /* Snap each .page-frame to the top of the viewport. mandatory means
@@ -1252,20 +1333,18 @@
   .page-stack.eye-med  .manga-page { filter: sepia(0.50) brightness(0.90) saturate(0.85); }
   .page-stack.eye-high .manga-page { filter: sepia(0.75) brightness(0.82) saturate(0.70); }
 
-  /* Each frame is exactly viewport-fit-height so scroll-snap settles
+  /* Each frame is exactly viewport-height so scroll-snap settles
      cleanly on a single frame at a time. The image is centered inside
      a flex container so portrait pages don't peek at the next frame's
      top from the viewport bottom, and so wider images don't push the
      frame past the viewport. Dynamic via the vh unit — resizing the
      window reflows automatically.
-     The earlier behaviour (frame sized to image) saved black space but
-     left bottom-of-viewport peek for any page shorter than the screen
-     and made scroll-snap unreliable across chapter transitions. */
+     Full 100vh: the header/footer are auto-hiding fixed overlays now,
+     so the page owns the entire window instead of subtracting their
+     heights. */
   .page-frame {
     width: 100%;
-    /* Header is 48px sticky, footer is 32px, plus a few px slack so the
-       frame doesn't poke into the footer's border. */
-    min-height: calc(100vh - 48px - 32px - 8px);
+    min-height: 100vh;
     margin: 0 auto;
     display: flex;
     align-items: center;
@@ -1291,8 +1370,10 @@
        intrinsic-size pages (Akane-banashi-style) no longer render at
        70% of viewport with black bars above/below. Width is `auto`
        so the aspect ratio is preserved; max-width: 100% guards
-       against the rare ultra-wide spread overflowing its wrapper. */
-    height: calc(100vh - 48px - 32px - 8px);
+       against the rare ultra-wide spread overflowing its wrapper.
+       Full 100vh — the bars overlay the page instead of reserving
+       layout space. */
+    height: 100vh;
     width: auto;
     max-width: 100%;
     display: block;
@@ -1513,8 +1594,13 @@
   }
 
   .reader-footer {
-    position: relative;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
     height: 32px;
+    transition: transform 0.25s ease;
     background: rgba(10, 10, 10, 0.85);
     backdrop-filter: blur(6px);
     display: flex;
@@ -1524,6 +1610,12 @@
     font-size: 0.75rem;
     color: var(--text-muted);
     flex-shrink: 0;
+  }
+
+  .reader-footer.hidden {
+    /* Slide far enough that the 2px progress bar riding on the
+       footer's top edge goes off-screen with it. */
+    transform: translateY(calc(100% + 2px));
   }
 
   .progress-bar {

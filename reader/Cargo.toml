@@ -3,7 +3,7 @@ resolver = "2"
 members = ["api", "desktop/src-tauri"]
 
 [workspace.package]
-version = "0.9.6"
+version = "0.9.7"
 edition = "2021"
 authors = ["akitaonrails"]
 
@@ -17,8 +17,12 @@ reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "brotli", "cooki
 # CDN at jumpg-assets3.tokyo-cdn.com rejects rustls/openssl handshakes
 # (returns 400 to curl AND reqwest); it specifically accepts Android
 # OkHttp's BoringSSL profile, which wreq can mimic.
-wreq = "6.0.0-rc.28"
-wreq-util = "3.0.0-rc.11"
+# Pinned EXACTLY: wreq 6.0.0-rc.31 swapped its BoringSSL backend
+# (boring2) for btls, which changes the TLS fingerprint the CDN sees.
+# Fixture tests can't catch a live handshake regression, so don't let
+# `cargo update` move these without a manual live-CDN check.
+wreq = "=6.0.0-rc.28"
+wreq-util = "=3.0.0-rc.11"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
