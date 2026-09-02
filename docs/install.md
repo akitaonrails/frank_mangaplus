@@ -48,7 +48,7 @@ That's the whole flow if you only want free content. Skip the rest of this page.
 
 If you pay for MANGA Plus on a phone and want the subscription-locked chapters on desktop too, you need to replace the free-tier `deviceSecret` with your existing subscriber one. The subscriber secret lives in your phone install — there's no way to migrate the subscription itself, just the token it's tied to.
 
-Extract from your phone. Path depends on whether it's rooted.
+Extract from your phone. On Android the path depends on whether it's rooted; on iOS you read the secret off the wire instead.
 
 **Rooted phone (Magisk):**
 
@@ -69,6 +69,10 @@ That value is what you need.
 Set up a rooted Android emulator on your desktop. About 20 minutes the first time, never again. Full walkthrough in [docs/android-secret.md](android-secret.md). Rough shape: Android Studio + Play Store image, root it with [rootAVD](https://github.com/newbit1/rootAVD), sign into Google Play with your subscription account, install MANGA Plus from the Play Store, then the `adb shell` command above.
 
 This is what I use. It doesn't touch the daily phone.
+
+**iPhone (iOS):**
+
+There's no rooting equivalent, so you proxy the app instead: point the phone at mitmproxy on your desktop, trust its CA, open any chapter, and pull `secret=` out of the request query string. Full walkthrough in [docs/ios-secret.md](ios-secret.md). Same 32-hex-char value the Android path produces.
 
 **Paste it into the app:**
 
