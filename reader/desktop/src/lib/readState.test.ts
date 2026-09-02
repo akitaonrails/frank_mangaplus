@@ -6,6 +6,9 @@ import {
   getLastReadChapter,
   getSortDescending,
   setSortDescending,
+  getReadVisibility,
+  setReadVisibility,
+  nextReadVisibility,
   getPageMode,
   setPageMode,
   getPageModeForTitle,
@@ -179,5 +182,26 @@ describe('readState', () => {
     expect(getHelpSeen()).toBe(true);
     setHelpSeen(false);
     expect(getHelpSeen()).toBe(false);
+  });
+});
+
+describe('readVisibility', () => {
+  it('defaults to hiding read chapters', () => {
+    expect(getReadVisibility()).toBe('hidden');
+  });
+
+  it('round-trips a stored mode and ignores junk', () => {
+    setReadVisibility('compact');
+    expect(getReadVisibility()).toBe('compact');
+    setReadVisibility('all');
+    expect(getReadVisibility()).toBe('all');
+    localStorage.setItem('mp:readVis', 'nonsense');
+    expect(getReadVisibility()).toBe('hidden');
+  });
+
+  it('cycles hidden → compact → all → hidden', () => {
+    expect(nextReadVisibility('hidden')).toBe('compact');
+    expect(nextReadVisibility('compact')).toBe('all');
+    expect(nextReadVisibility('all')).toBe('hidden');
   });
 });

@@ -86,6 +86,28 @@ export function setSortDescending(v: boolean) {
   localStorage.setItem(KEY_SORT_DESC, v ? '1' : '0');
 }
 
+// How already-read chapters are presented in a title's chapter list.
+//   - "hidden"  — read chapters are omitted; only unread ones show (default)
+//   - "compact" — read chapters collapse to a slim one-line row
+//   - "all"     — every chapter at full height
+// One global flag, like the sort order: readers who want unread-only
+// want it for every title, not per title.
+export type ReadVisibility = 'hidden' | 'compact' | 'all';
+const KEY_READ_VIS = 'mp:readVis';
+const READ_VIS_VALUES: ReadVisibility[] = ['hidden', 'compact', 'all'];
+export function getReadVisibility(): ReadVisibility {
+  const v = localStorage.getItem(KEY_READ_VIS);
+  return (READ_VIS_VALUES as string[]).includes(v ?? '') ? (v as ReadVisibility) : 'hidden';
+}
+export function setReadVisibility(v: ReadVisibility) {
+  localStorage.setItem(KEY_READ_VIS, v);
+}
+// Cycle order driven by the toggle button: hidden → compact → all → hidden.
+export function nextReadVisibility(v: ReadVisibility): ReadVisibility {
+  const i = READ_VIS_VALUES.indexOf(v);
+  return READ_VIS_VALUES[(i + 1) % READ_VIS_VALUES.length];
+}
+
 // Reader page layout.
 //   - "single"       — one page per frame, the default
 //   - "double"       — sequential pairs starting from page 1: [1,2],[3,4],…
