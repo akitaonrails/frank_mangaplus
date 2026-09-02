@@ -2,13 +2,23 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import type { TitleDetailView, Chapter } from '$lib/types';
+  import type { TitleDetailView } from '$lib/types';
   import {
     getReadChapters,
     getLastReadChapter,
     getSortDescending,
     setSortDescending,
+    getReadVisibility,
+    setReadVisibility,
+    nextReadVisibility,
+    type ReadVisibility,
   } from '$lib/readState';
+  import {
+    flattenChapters,
+    buildChapterList,
+    visibleRange,
+    type ChapterRow,
+  } from '$lib/chapterListLogic';
   import { proxied } from '$lib/img';
   import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
   import { withIpcTimeout } from '$lib/ipcTimeout';
@@ -30,18 +40,24 @@
   let favPending = $state(false);
   let favError = $state('');
   let sortDesc = $state(true);
+  let readVis: ReadVisibility = $state('hidden');
   let readSet: Set<number> = $state(new Set());
   let lastReadId: number | null = $state(null);
 
   // Flattened chapter list for rendering
-  type ChapterRow = { type: 'chapter'; chapter: Chapter } | { type: 'divider'; label: string };
   let rows: ChapterRow[] = $state([]);
+  // Prefix sums of row heights — rows vary in height (a read chapter in
+  // "compact" mode is a slim line), so the virtualizer indexes this
+  // table instead of multiplying by a constant.
+  let rowOffsets: number[] = $state([0]);
+  let totalChapters = $state(0);
+  let unreadCount = $state(0);
+  let hiddenCount = $state(0);
 
   // Virtualization state
   let listContainer: HTMLElement | undefined = $state(undefined);
   let visibleStart = $state(0);
   let visibleEnd = $state(50);
-  const ITEM_HEIGHT = 72; // approximate px per row
   const OVERSCAN = 10;
 
   let bannerCss = $derived.by(() => {
@@ -49,8 +65,8 @@
     return bg ? 'url(' + proxied(bg) + ')' : 'none';
   });
 
-  let totalHeight = $derived(rows.length * ITEM_HEIGHT);
-  let offsetTop = $derived(visibleStart * ITEM_HEIGHT);
+  let totalHeight = $derived(rowOffsets[rowOffsets.length - 1] ?? 0);
+  let offsetTop = $derived(rowOffsets[visibleStart] ?? 0);
   let visibleRows = $derived(rows.slice(visibleStart, visibleEnd));
   type StyleMap = Record<string, string>;
   let bannerStyles = $derived({ 'background-image': bannerCss });
@@ -81,6 +97,7 @@
 
   onMount(() => {
     sortDesc = getSortDescending();
+    readVis = getReadVisibility();
   });
 
   $effect(() => {
@@ -101,12 +118,17 @@
     void loadDetail(id, activeLang, activeClang, activeCountry, seq);
   });
 
-  // Reload read-state and rows whenever titleId / sortDesc change.
+  // Reload read-state and rows whenever titleId / sortDesc / read
+  // visibility change. `reads` is passed into buildRows rather than read
+  // back off `readSet`: this effect *writes* readSet, and an effect that
+  // also reads what it writes re-triggers itself forever
+  // ("effect_update_depth_exceeded").
   $effect(() => {
     if (detail) {
-      readSet = getReadChapters(titleId);
+      const reads = getReadChapters(titleId);
+      readSet = reads;
       lastReadId = getLastReadChapter(titleId);
-      buildRows(detail);
+      buildRows(detail, reads);
     }
   });
 
@@ -131,9 +153,10 @@
       }));
       if (seq !== loadSeq) return;
       detail = d;
-      readSet = getReadChapters(id);
+      const reads = getReadChapters(id);
+      readSet = reads;
       lastReadId = getLastReadChapter(id);
-      buildRows(d);
+      buildRows(d, reads);
       loading = false;
 
       void loadFavoriteState(id, seq);
@@ -158,44 +181,62 @@
     }
   }
 
-  function buildRows(d: TitleDetailView) {
-    let chapters: Chapter[] = [];
-    let dividers: { afterIndex: number; label: string }[] = [];
+  function buildRows(d: TitleDetailView, reads: ReadonlySet<number>, resetScroll = true) {
+    const { chapters, leadingDivider } = flattenChapters(d);
+    const built = buildChapterList(chapters, {
+      sortDesc,
+      readSet: reads,
+      visibility: readVis,
+      leadingDivider,
+    });
 
-    if (d.chapterListV2 && d.chapterListV2.length > 0) {
-      chapters = [...d.chapterListV2];
-    } else if (d.chapterListGroup) {
-      const grp = d.chapterListGroup;
-      chapters = [
-        ...grp.firstChapterList,
-        ...grp.midChapterList,
-        ...grp.lastChapterList,
-      ];
-      if (grp.chapterNumbers) {
-        dividers.push({ afterIndex: -1, label: grp.chapterNumbers });
-      }
-    }
-
-    // Server returns ascending (oldest → newest). Reverse for descending.
-    if (sortDesc) chapters.reverse();
-
-    const built: ChapterRow[] = [];
-    for (const div of dividers) if (div.afterIndex === -1) built.push({ type: 'divider', label: div.label });
-    for (const ch of chapters) built.push({ type: 'chapter', chapter: ch });
-
-    // Important: use built.length (not rows.length) here. Reading rows
-    // right after writing it inside the $effect → infinite reactive loop
-    // ("effect_update_depth_exceeded"). Same value, different dep graph.
-    rows = built;
-    visibleEnd = Math.min(50, built.length);
-    if (listContainer) listContainer.scrollTop = 0;
+    // Important: read from `built` (not the rows/rowOffsets state) here.
+    // Reading state right after writing it inside the $effect →
+    // infinite reactive loop ("effect_update_depth_exceeded"). Same
+    // values, different dep graph.
+    rows = built.rows;
+    rowOffsets = built.offsets;
+    totalChapters = built.totalChapters;
+    unreadCount = built.unreadCount;
+    hiddenCount = built.hiddenCount;
+    visibleStart = 0;
+    visibleEnd = Math.min(50, built.rows.length);
+    if (resetScroll && listContainer) listContainer.scrollTop = 0;
   }
 
   function toggleSort() {
     sortDesc = !sortDesc;
     setSortDescending(sortDesc);
-    if (detail) buildRows(detail);
+    if (detail) buildRows(detail, readSet);
   }
+
+  // Cycle: hidden → compact → all. Read chapters are hidden by default
+  // so opening a title shows what's left to read; the other two modes
+  // bring them back (slim, then full) for re-reading.
+  function cycleReadVisibility() {
+    readVis = nextReadVisibility(readVis);
+    setReadVisibility(readVis);
+    if (detail) buildRows(detail, readSet);
+  }
+
+  function showAllChapters() {
+    if (readVis === 'all') return;
+    readVis = 'all';
+    setReadVisibility(readVis);
+    if (detail) buildRows(detail, readSet);
+  }
+
+  let readVisLabel = $derived(
+    readVis === 'hidden' ? '\u25CF Unread only'
+      : readVis === 'compact' ? '\u25D0 Read collapsed'
+      : '\u25CB All chapters',
+  );
+  let readVisHint = $derived(
+    readVis === 'hidden'
+      ? `${hiddenCount} read chapter${hiddenCount === 1 ? '' : 's'} hidden \u2014 click to collapse them instead`
+      : readVis === 'compact' ? 'Read chapters are collapsed \u2014 click to show them in full'
+      : 'All chapters shown \u2014 click to hide read ones',
+  );
 
   function openChapter(chapterId: number, e?: MouseEvent) {
     if (e) {
@@ -215,10 +256,7 @@
 
   function onScroll(e: Event) {
     const el = e.target as HTMLElement;
-    const scrollTop = el.scrollTop;
-    const viewportH = el.clientHeight;
-    const start = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
-    const end = Math.min(rows.length, Math.ceil((scrollTop + viewportH) / ITEM_HEIGHT) + OVERSCAN);
+    const { start, end } = visibleRange(rowOffsets, el.scrollTop, el.clientHeight, OVERSCAN);
     visibleStart = start;
     visibleEnd = end;
   }
@@ -304,18 +342,35 @@
       <!-- Right column: virtual chapter list -->
       <section class="chapter-section">
         <div class="chapter-header">
-          <h2 class="section-heading">Chapters ({rows.filter(r => r.type === 'chapter').length})</h2>
+          <h2 class="section-heading">
+            Chapters
+            {#if totalChapters > 0}
+              ({unreadCount} unread of {totalChapters})
+            {/if}
+          </h2>
           <div class="chapter-actions">
             {#if lastReadId != null}
               <a class="continue-link" href="/reader/{lastReadId}{readerSuffix}">Continue ▶</a>
             {/if}
+            <button
+              class="sort-btn"
+              onclick={cycleReadVisibility}
+              title={readVisHint}
+            >
+              {readVisLabel}
+            </button>
             <button class="sort-btn" onclick={toggleSort} title="Toggle sort order">
               {sortDesc ? '↓ Newest first' : '↑ Oldest first'}
             </button>
           </div>
         </div>
-        {#if rows.length === 0}
+        {#if totalChapters === 0}
           <p class="no-chapters">No chapters available.</p>
+        {:else if unreadCount === 0 && readVis === 'hidden'}
+          <p class="no-chapters">
+            All {totalChapters} chapters read — nothing new here.
+            <button class="link-btn" onclick={showAllChapters}>Show all chapters</button>
+          </p>
         {:else}
           <div
             class="chapter-scroll"
@@ -332,24 +387,28 @@
                     {@const ch = row.chapter}
                     <a
                       class="chapter-row"
-                      class:is-read={readSet.has(ch.chapterId)}
+                      class:is-read={row.read}
+                      class:is-compact={row.compact}
                       class:is-last-read={ch.chapterId === lastReadId}
                       href="/reader/{ch.chapterId}{readerSuffix}"
                       onclick={(e) => openChapter(ch.chapterId, e)}
                     >
                       <div class="chapter-meta">
                         <span class="chapter-name">{ch.name}</span>
-                        {#if ch.isUpdated}
+                        {#if row.compact && ch.subTitle}
+                          <span class="chapter-subtitle inline">{ch.subTitle}</span>
+                        {/if}
+                        {#if ch.isUpdated && !row.read}
                           <span class="badge badge-new">New</span>
                         {/if}
-                        {#if readSet.has(ch.chapterId)}
+                        {#if row.read && !row.compact}
                           <span class="badge badge-read">Read</span>
                         {/if}
                         {#if ch.chapterId === lastReadId}
                           <span class="badge badge-last">Last opened</span>
                         {/if}
                       </div>
-                      {#if ch.subTitle}
+                      {#if ch.subTitle && !row.compact}
                         <span class="chapter-subtitle">{ch.subTitle}</span>
                       {/if}
                     </a>
@@ -524,6 +583,7 @@
     color: var(--text-muted);
     background: var(--bg-elevated);
     border-bottom: 1px solid var(--border);
+    /* Matches ROW_H_DIVIDER in lib/chapterListLogic.ts. */
     height: 72px;
     display: flex;
     align-items: center;
@@ -535,7 +595,11 @@
     justify-content: center;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
-    min-height: 72px;
+    /* Fixed, not min-height: the virtualizer positions the visible
+       window from a height table (lib/chapterListLogic.ts, ROW_H_FULL),
+       so a row that grows would drift out of sync with the spacer. */
+    height: 72px;
+    overflow: hidden;
     transition: background 0.12s;
     cursor: pointer;
   }
@@ -609,6 +673,53 @@
   .chapter-row.is-read .chapter-name,
   .chapter-row.is-read .chapter-subtitle {
     color: var(--text-muted);
+  }
+
+  /* "Read collapsed" mode: a read chapter shrinks to a single slim line
+     so finished chapters stay reachable without pushing unread ones off
+     screen. The height here must match ROW_H_COMPACT in
+     lib/chapterListLogic.ts — the virtualizer positions rows absolutely
+     from those numbers. */
+  .chapter-row.is-compact {
+    flex-direction: row;
+    align-items: center;
+    height: 34px;
+    padding: 0 14px;
+    opacity: 0.62;
+  }
+
+  .chapter-row.is-compact .chapter-meta {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .chapter-row.is-compact .chapter-name {
+    font-size: 0.8rem;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .chapter-row.is-compact:hover {
+    opacity: 1;
+  }
+
+  .chapter-subtitle.inline {
+    margin-top: 0;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .link-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: inherit;
+    padding: 0 0 0 4px;
+    cursor: pointer;
+    text-decoration: underline;
   }
 
   .chapter-row.is-last-read {
