@@ -1,2 +1,6 @@
-[tools]
-python = "system"
+# Keep this project on the system Python rather than a mise-managed one.
+# Previously expressed as `[tools] python = "system"`; the "@system"
+# version was deprecated in favour of disabling the tool outright
+# (the env-var form is MISE_DISABLE_TOOLS=python).
+[settings]
+disable_tools = ["python"]
