@@ -175,11 +175,78 @@ fn resolve_secret(env_val: Option<&str>, path: &std::path::Path) -> String {
     String::new()
 }
 
+/// Query parameter the reader appends to bust a failed image load.
+/// Must match `RETRY_PARAM` in `src/lib/readerLogic.ts`.
+const RETRY_PARAM: &str = "mpretry";
+
+/// Strip the reader's cache-busting retry parameter from a CDN URL.
+///
+/// The reader needs the `<img>` src to change so WebKit treats a retry
+/// as a new resource, but the CDN checks a signed query string — so the
+/// parameter has to come back off before the URL leaves this process.
+/// A fragment would avoid that, but fragments never reach a URL loader
+/// and are excluded from WebKit's cache key, so they cannot force a
+/// refetch in the first place.
+fn strip_retry_param(url: &str) -> String {
+    let Some((base, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|p| {
+            let name = p.split_once('=').map(|(k, _)| k).unwrap_or(p);
+            name != RETRY_PARAM
+        })
+        .collect();
+    if kept.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", kept.join("&"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{filter_to_language, lang_str_to_enum, merge_views, resolve_secret};
+    use super::{
+        filter_to_language, lang_str_to_enum, merge_views, resolve_secret, strip_retry_param,
+    };
     use mangaplus_api::proto;
     use std::io::Write;
+
+    #[test]
+    fn strip_retry_param_removes_only_the_retry_key() {
+        // Signed query preserved verbatim; only mpretry comes off.
+        assert_eq!(
+            strip_retry_param("https://cdn/a/1.webp?hash=abc&mpretry=2"),
+            "https://cdn/a/1.webp?hash=abc"
+        );
+        // Retry param first in the query.
+        assert_eq!(
+            strip_retry_param("https://cdn/a/1.webp?mpretry=2&hash=abc"),
+            "https://cdn/a/1.webp?hash=abc"
+        );
+        // Sole param: the "?" goes too, so the URL matches the
+        // un-retried form byte for byte.
+        assert_eq!(
+            strip_retry_param("https://cdn/a/1.webp?mpretry=1"),
+            "https://cdn/a/1.webp"
+        );
+    }
+
+    #[test]
+    fn strip_retry_param_leaves_untouched_urls_alone() {
+        assert_eq!(
+            strip_retry_param("https://cdn/a/1.webp?hash=abc"),
+            "https://cdn/a/1.webp?hash=abc"
+        );
+        assert_eq!(strip_retry_param("https://cdn/a/1.webp"), "https://cdn/a/1.webp");
+        // A param that merely starts with the same letters is not the
+        // retry param and must survive.
+        assert_eq!(
+            strip_retry_param("https://cdn/a/1.webp?mpretryx=9"),
+            "https://cdn/a/1.webp?mpretryx=9"
+        );
+    }
 
     fn title(id: u32, name: &str, language: i32) -> proto::Title {
         proto::Title {
@@ -957,7 +1024,9 @@ pub fn run() {
         // Frontend usage: replace the `https://` of imageUrl with `mpimg://`.
         .register_asynchronous_uri_scheme_protocol("mpimg", move |_ctx, request, responder| {
             let url = request.uri().to_string();
-            let https_url = url.replacen("mpimg://", "https://", 1);
+            // Drop the reader's retry cache-buster before the URL goes
+            // to the CDN — it is not part of the signed query.
+            let https_url = strip_retry_param(&url.replacen("mpimg://", "https://", 1));
             let client = scheme_state_for_handler
                 .lock()
                 .map(|g| g.clone())

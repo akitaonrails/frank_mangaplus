@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  retryImageSrc,
+  RETRY_PARAM,
   buildPageGroups,
   scanChapterBounds,
   chapterIdAfter,
@@ -268,5 +270,39 @@ describe('keyToReaderAction', () => {
     expect(keyToReaderAction('Tab')).toBe(null);
     // Case sensitivity: only 'd'/'D' are mapped, not other casings.
     expect(keyToReaderAction('e')).toBe(null);
+  });
+});
+
+describe('retryImageSrc', () => {
+  const signed = 'mpimg://cdn.example/secure/1.webp?hash=abc';
+
+  it('leaves attempt 0 untouched', () => {
+    expect(retryImageSrc(signed, 0)).toBe(signed);
+    expect(retryImageSrc(signed, -1)).toBe(signed);
+  });
+
+  it('appends the retry param to an already-queried URL', () => {
+    expect(retryImageSrc(signed, 2)).toBe(`${signed}&${RETRY_PARAM}=2`);
+  });
+
+  it('starts a query when the URL has none', () => {
+    expect(retryImageSrc('mpimg://cdn.example/a.webp', 1)).toBe(
+      `mpimg://cdn.example/a.webp?${RETRY_PARAM}=1`,
+    );
+  });
+
+  it('uses a query param, never a fragment — a fragment never reaches the loader', () => {
+    const out = retryImageSrc(signed, 3);
+    expect(out).not.toContain('#');
+    expect(out).toContain(`${RETRY_PARAM}=3`);
+  });
+
+  it('produces a distinct src per attempt so the resource identity changes', () => {
+    const seen = new Set([1, 2, 3].map(n => retryImageSrc(signed, n)));
+    expect(seen.size).toBe(3);
+  });
+
+  it('handles an empty base', () => {
+    expect(retryImageSrc('', 2)).toBe('');
   });
 });

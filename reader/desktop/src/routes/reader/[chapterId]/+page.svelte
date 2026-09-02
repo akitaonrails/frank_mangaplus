@@ -30,6 +30,7 @@
     findGroupContainingPage,
     firstGroupOfChapter,
     keyToReaderAction,
+    retryImageSrc,
     type LoadedPage,
     type PageGroup,
   } from '$lib/readerLogic';
@@ -201,12 +202,17 @@
   const imageRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   function imageSrc(url: string): string {
-    const base = proxied(url);
-    const n = imageAttempts.get(url) ?? 0;
-    // Fragments don't reach the server — the mpimg custom protocol
-    // handler in lib.rs strips them — but they change what the browser
-    // sees as the src, forcing a fresh request.
-    return n > 0 ? `${base}#attempt=${n}` : base;
+    return retryImageSrc(proxied(url), imageAttempts.get(url) ?? 0);
+  }
+
+  // Retry identity for the {#each} key. Bumping the attempt count
+  // changes the key, so Svelte destroys and recreates the <img> rather
+  // than patching its src. That matters: WebKit records a failed load
+  // against the element itself, so a patched src on a broken <img> can
+  // be ignored. Recreating the element is what leaving the chapter and
+  // re-entering does — the one recovery path known to work.
+  function imageKey(url: string): string {
+    return `${url}|${imageAttempts.get(url) ?? 0}`;
   }
 
   function onImageError(url: string) {
@@ -1030,13 +1036,15 @@
             data-group-index={gi}
             bind:this={frameEls[gi]}
           >
-            {#each group.pages as lp, pi (lp.mp.imageUrl)}
+            {#each group.pages as lp, pi (imageKey(lp.mp.imageUrl))}
               <!--
                 width + height attrs reserve the correct aspect-ratio'd
                 space before bytes arrive (prevents Cumulative Layout
                 Shift). onerror/onload track per-image fetch outcome so
                 we can surface a retry overlay; the imageSrc helper
-                appends a fragment when retrying so the browser refetches.
+                appends a cache-busting query param when retrying (see
+                readerLogic.retryImageSrc) and the each-key above forces
+                a fresh element so the refetch actually happens.
                 Fallback to typical MANGA Plus page dimensions (836x1200)
                 when the proto returned zeroes — otherwise the wrapper
                 collapses and the placeholder is invisible until bytes

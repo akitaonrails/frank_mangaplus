@@ -210,3 +210,31 @@ const KEY_MAP: Record<string, ReaderAction> = {
 export function keyToReaderAction(key: string): ReaderAction | null {
   return KEY_MAP[key] ?? null;
 }
+
+/** Query parameter used to bust a failed image load. Stripped by the
+ *  `mpimg://` scheme handler in `src-tauri/src/lib.rs` before the URL is
+ *  forwarded to the CDN, so the signed query the CDN checks is
+ *  unchanged. Keep the two in sync. */
+export const RETRY_PARAM = 'mpretry';
+
+/**
+ * Build the `<img src>` for a page, given how many reload attempts it
+ * has taken. Attempt 0 is the untouched proxied URL.
+ *
+ * This MUST be a query parameter, not a fragment. A fragment is never
+ * sent to a URL loader, so the Rust scheme handler cannot see it, and
+ * WebKit drops the fragment when computing its memory-cache key — so a
+ * fragment-only change resolves to the same already-failed resource and
+ * the load short-circuits instead of re-requesting. A query parameter
+ * changes the resource identity the loader and cache actually key on.
+ *
+ * Note that a changed src alone is still not enough to recover a broken
+ * `<img>`: WebKit also remembers the failed load on the element itself.
+ * The reader keys its `{#each}` on the attempt count so the element is
+ * recreated, which is what leaving the chapter and coming back does.
+ */
+export function retryImageSrc(base: string, attempt: number): string {
+  if (!base || attempt <= 0) return base;
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}${RETRY_PARAM}=${attempt}`;
+}
