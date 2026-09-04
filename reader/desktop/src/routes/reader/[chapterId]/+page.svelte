@@ -30,6 +30,9 @@
     findGroupContainingPage,
     firstGroupOfChapter,
     keyToReaderAction,
+    retryImageSrc,
+    isUrlExpired,
+    expiredChapterIds,
     type LoadedPage,
     type PageGroup,
   } from '$lib/readerLogic';
@@ -201,15 +204,29 @@
   const imageRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   function imageSrc(url: string): string {
-    const base = proxied(url);
-    const n = imageAttempts.get(url) ?? 0;
-    // Fragments don't reach the server — the mpimg custom protocol
-    // handler in lib.rs strips them — but they change what the browser
-    // sees as the src, forcing a fresh request.
-    return n > 0 ? `${base}#attempt=${n}` : base;
+    return retryImageSrc(proxied(url), imageAttempts.get(url) ?? 0);
+  }
+
+  // Retry identity for the {#each} key. Bumping the attempt count
+  // changes the key, so Svelte destroys and recreates the <img> rather
+  // than patching its src. That matters: WebKit records a failed load
+  // against the element itself, so a patched src on a broken <img> can
+  // be ignored. Recreating the element is what leaving the chapter and
+  // re-entering does — the one recovery path known to work.
+  function imageKey(url: string): string {
+    return `${url}|${imageAttempts.get(url) ?? 0}`;
   }
 
   function onImageError(url: string) {
+    // An expired signed URL is permanently dead (410 Gone). Spending the
+    // retry budget on it accomplishes nothing; only fresh URLs help.
+    if (isUrlExpired(url)) {
+      const owner = chapterIdForImage(url);
+      if (owner != null) {
+        void refreshChapterPages(owner);
+        return;
+      }
+    }
     const attempts = imageAttempts.get(url) ?? 0;
     if (attempts >= MAX_AUTO_RETRIES) {
       // Auto-retry budget exhausted. Show the manual hatch.
@@ -245,6 +262,15 @@
   }
 
   function retryImage(url: string) {
+    // Same as the auto path: a dead URL needs re-signing, not another
+    // request. This is the button the user pressed that "did nothing".
+    if (isUrlExpired(url)) {
+      const owner = chapterIdForImage(url);
+      if (owner != null) {
+        void refreshChapterPages(owner);
+        return;
+      }
+    }
     // Manual retry beyond the auto-budget — bump attempts and clear
     // failure so the overlay disappears while the new fetch is in
     // flight. If THIS attempt fails too, onImageError sees attempts
@@ -257,6 +283,81 @@
     }
     imageAttempts = new Map(imageAttempts).set(url, attempts);
     failedImageUrls = setWithoutStr(failedImageUrls, url);
+  }
+
+  // Chapters currently being re-signed. A screenful of simultaneously
+  // expired <img> elements would otherwise fire a dozen identical
+  // get_chapter_pages calls.
+  const refreshingChapterIds = new Set<number>();
+
+  /** The chapter that owns a page URL, or null once it has been replaced. */
+  function chapterIdForImage(url: string): number | null {
+    return loadedPages.find(lp => lp.mp.imageUrl === url)?.chapterId ?? null;
+  }
+
+  /**
+   * Replace a chapter's page URLs in place with freshly signed ones.
+   *
+   * MANGA Plus CDN URLs carry a hard `expires`; once it passes the CDN
+   * answers 410 Gone, and retrying the same URL can never succeed no
+   * matter how correct the retry plumbing is. This is why leaving the
+   * chapter and re-entering was the only recovery anyone ever found —
+   * that path calls get_chapter_pages, which mints new URLs. Do the same
+   * thing here, without losing scroll position.
+   */
+  async function refreshChapterPages(chapterId: number) {
+    if (refreshingChapterIds.has(chapterId)) return;
+    refreshingChapterIds.add(chapterId);
+    try {
+      const res = await fetchChapter(chapterId);
+      if (!res.ok) {
+        console.warn(`[reader] URL refresh for chapter ${chapterId} failed:`, res.error);
+        return;
+      }
+      const fresh = (res.viewer.pages ?? [])
+        .map(p => p.data?.mangaPage)
+        .filter((mp): mp is MangaPage => !!mp);
+      if (fresh.length === 0) return;
+
+      // Positional swap: the CDN re-signs the same pages in the same
+      // order, so page N of the refetch is page N of what we hold. A
+      // short response leaves the tail untouched rather than truncating.
+      let i = 0;
+      const staleUrls: string[] = [];
+      loadedPages = loadedPages.map(lp => {
+        if (lp.chapterId !== chapterId) return lp;
+        const next = fresh[i++];
+        if (!next) return lp;
+        staleUrls.push(lp.mp.imageUrl);
+        return { ...lp, mp: next };
+      });
+      if (staleUrls.length === 0) return;
+
+      // The new URLs must start from a clean slate — inheriting an
+      // exhausted retry budget would leave them stuck behind the same
+      // overlay the dead URLs were.
+      const attempts = new Map(imageAttempts);
+      const failed = new Set(failedImageUrls);
+      for (const url of staleUrls) {
+        const timer = imageRetryTimers.get(url);
+        if (timer) clearTimeout(timer);
+        imageRetryTimers.delete(url);
+        attempts.delete(url);
+        failed.delete(url);
+      }
+      imageAttempts = attempts;
+      failedImageUrls = failed;
+    } finally {
+      refreshingChapterIds.delete(chapterId);
+    }
+  }
+
+  // After a lid close the entire stack of signed URLs can be dead at
+  // once. Refresh when the window comes back rather than making every
+  // lazy <img> discover its own 410 one at a time.
+  function onVisibilityChange() {
+    if (document.visibilityState !== 'visible') return;
+    for (const id of expiredChapterIds(loadedPages)) void refreshChapterPages(id);
   }
 
   function reloadAllImages() {
@@ -282,6 +383,26 @@
     out.delete(v);
     return out;
   }
+
+  // Absolute index in loadedPages -> 1-based page number within its own
+  // chapter. The reload overlay has to agree with the progress bar,
+  // which counts per chapter (pageInChapter); labelling the overlay with
+  // the absolute index made it announce "Reload page 63" while the bar
+  // read "Page 18 of 45" as soon as the reader had scrolled past a
+  // chapter boundary. Built in one pass rather than calling
+  // scanChapterBounds per rendered group, which would be quadratic.
+  let pageNumberInChapter: number[] = $derived.by(() => {
+    const out = new Array<number>(loadedPages.length);
+    let n = 0;
+    let prev: number | null = null;
+    for (let i = 0; i < loadedPages.length; i++) {
+      const cid = loadedPages[i].chapterId;
+      n = cid === prev ? n + 1 : 1;
+      prev = cid;
+      out[i] = n;
+    }
+    return out;
+  });
 
   // Pages bundled into render frames. See lib/readerLogic.ts for the
   // pure grouping logic + its unit tests.
@@ -388,12 +509,14 @@
     eyeFilter = getEyeFilter();
     window.addEventListener('keydown', onKey);
     window.addEventListener('mousemove', onBarMouseMove);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     // Bars start visible so the user can orient, then collapse.
     scheduleBarHide('top');
     scheduleBarHide('bottom');
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousemove', onBarMouseMove);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       observer?.disconnect();
     };
   });
@@ -1030,13 +1153,15 @@
             data-group-index={gi}
             bind:this={frameEls[gi]}
           >
-            {#each group.pages as lp, pi (lp.mp.imageUrl)}
+            {#each group.pages as lp, pi (imageKey(lp.mp.imageUrl))}
               <!--
                 width + height attrs reserve the correct aspect-ratio'd
                 space before bytes arrive (prevents Cumulative Layout
                 Shift). onerror/onload track per-image fetch outcome so
                 we can surface a retry overlay; the imageSrc helper
-                appends a fragment when retrying so the browser refetches.
+                appends a cache-busting query param when retrying (see
+                readerLogic.retryImageSrc) and the each-key above forces
+                a fresh element so the refetch actually happens.
                 Fallback to typical MANGA Plus page dimensions (836x1200)
                 when the proto returned zeroes — otherwise the wrapper
                 collapses and the placeholder is invisible until bytes
@@ -1045,7 +1170,7 @@
               <div class="page-image-wrapper">
                 <img
                   src={imageSrc(lp.mp.imageUrl)}
-                  alt="Page {group.firstPageIndex + pi + 1}"
+                  alt="Page {pageNumberInChapter[group.firstPageIndex + pi] ?? group.firstPageIndex + pi + 1}"
                   width={lp.mp.width || 836}
                   height={lp.mp.height || 1200}
                   loading={group.firstPageIndex + pi < 3 ? 'eager' : 'lazy'}
@@ -1059,10 +1184,10 @@
                   <button
                     class="image-retry-btn"
                     type="button"
-                    aria-label="Retry loading page {group.firstPageIndex + pi + 1}"
+                    aria-label="Retry loading page {pageNumberInChapter[group.firstPageIndex + pi] ?? group.firstPageIndex + pi + 1}"
                     onclick={(e) => { e.stopPropagation(); retryImage(lp.mp.imageUrl); }}
                   >
-                    ↻ Reload page {group.firstPageIndex + pi + 1}
+                    ↻ Reload page {pageNumberInChapter[group.firstPageIndex + pi] ?? group.firstPageIndex + pi + 1}
                   </button>
                 {/if}
               </div>

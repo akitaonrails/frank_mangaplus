@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  retryImageSrc,
+  RETRY_PARAM,
+  urlExpiresAt,
+  isUrlExpired,
+  expiredChapterIds,
   buildPageGroups,
   scanChapterBounds,
   chapterIdAfter,
@@ -268,5 +273,129 @@ describe('keyToReaderAction', () => {
     expect(keyToReaderAction('Tab')).toBe(null);
     // Case sensitivity: only 'd'/'D' are mapped, not other casings.
     expect(keyToReaderAction('e')).toBe(null);
+  });
+});
+
+describe('retryImageSrc', () => {
+  const signed = 'mpimg://cdn.example/secure/1.webp?hash=abc';
+
+  it('leaves attempt 0 untouched', () => {
+    expect(retryImageSrc(signed, 0)).toBe(signed);
+    expect(retryImageSrc(signed, -1)).toBe(signed);
+  });
+
+  it('appends the retry param to an already-queried URL', () => {
+    expect(retryImageSrc(signed, 2)).toBe(`${signed}&${RETRY_PARAM}=2`);
+  });
+
+  it('starts a query when the URL has none', () => {
+    expect(retryImageSrc('mpimg://cdn.example/a.webp', 1)).toBe(
+      `mpimg://cdn.example/a.webp?${RETRY_PARAM}=1`,
+    );
+  });
+
+  it('uses a query param, never a fragment — a fragment never reaches the loader', () => {
+    const out = retryImageSrc(signed, 3);
+    expect(out).not.toContain('#');
+    expect(out).toContain(`${RETRY_PARAM}=3`);
+  });
+
+  it('produces a distinct src per attempt so the resource identity changes', () => {
+    const seen = new Set([1, 2, 3].map(n => retryImageSrc(signed, n)));
+    expect(seen.size).toBe(3);
+  });
+
+  it('handles an empty base', () => {
+    expect(retryImageSrc('', 2)).toBe('');
+  });
+});
+
+// The real URL shape from a 2026-09-04 log capture, where every page of
+// a chapter shared expires=1788480000 (02:00 local) and the CDN answered
+// 410 Gone to every fetch after it.
+const SIGNED =
+  'https://jumpg-assets3.tokyo-cdn.com/secure/title/100004/chapter/1004422/manga_page/super_high/11.webp?hash=miIrwJMlnE7QCVfsQIs5LA&expires=1788480000';
+const EXPIRES = 1788480000;
+
+describe('urlExpiresAt', () => {
+  it('reads the expiry out of a signed CDN url', () => {
+    expect(urlExpiresAt(SIGNED)).toBe(EXPIRES);
+  });
+
+  it('returns null when there is no query at all', () => {
+    expect(urlExpiresAt('https://cdn/a/1.webp')).toBeNull();
+  });
+
+  it('returns null when expires is absent', () => {
+    expect(urlExpiresAt('https://cdn/a/1.webp?hash=abc')).toBeNull();
+  });
+
+  it('does not match a parameter that merely starts with expires', () => {
+    expect(urlExpiresAt('https://cdn/a/1.webp?expiresAt=123')).toBeNull();
+  });
+
+  it('returns null for a non-numeric or non-positive expiry', () => {
+    expect(urlExpiresAt('https://cdn/a/1.webp?expires=soon')).toBeNull();
+    expect(urlExpiresAt('https://cdn/a/1.webp?expires=0')).toBeNull();
+  });
+
+  it('finds expires regardless of position in the query', () => {
+    expect(urlExpiresAt('https://cdn/a.webp?expires=99&hash=x')).toBe(99);
+    expect(urlExpiresAt('https://cdn/a.webp?hash=x&expires=99')).toBe(99);
+  });
+});
+
+describe('isUrlExpired', () => {
+  it('is false well before the expiry', () => {
+    expect(isUrlExpired(SIGNED, (EXPIRES - 3600) * 1000)).toBe(false);
+  });
+
+  it('is true after the expiry — the 410 case from the log', () => {
+    // 07:58:47 local, ~6h past expires
+    expect(isUrlExpired(SIGNED, (EXPIRES + 6 * 3600) * 1000)).toBe(true);
+  });
+
+  it('is true just inside the skew window, before the wall-clock expiry', () => {
+    expect(isUrlExpired(SIGNED, (EXPIRES - 30) * 1000)).toBe(true);
+    expect(isUrlExpired(SIGNED, (EXPIRES - 90) * 1000)).toBe(false);
+  });
+
+  it('treats a url without expires as never expired', () => {
+    expect(isUrlExpired('https://cdn/a/1.webp?hash=abc', Date.now())).toBe(false);
+  });
+});
+
+describe('expiredChapterIds', () => {
+  const page = (chapterId: number, expires: number | null): LoadedPage => ({
+    mp: {
+      imageUrl: expires == null
+        ? 'https://cdn/a.webp?hash=x'
+        : `https://cdn/a.webp?hash=x&expires=${expires}`,
+      width: 836,
+      height: 1200,
+      encryptionKey: '',
+    } as LoadedPage['mp'],
+    chapterId,
+    chapterName: `c${chapterId}`,
+  });
+
+  it('returns each expired chapter once, in first-seen order', () => {
+    const now = (EXPIRES + 3600) * 1000;
+    const pages = [
+      page(1, EXPIRES),
+      page(1, EXPIRES),
+      page(2, EXPIRES + 86400),
+      page(3, EXPIRES),
+    ];
+    expect(expiredChapterIds(pages, now)).toEqual([1, 3]);
+  });
+
+  it('returns nothing when every url is still valid', () => {
+    const now = (EXPIRES - 3600) * 1000;
+    expect(expiredChapterIds([page(1, EXPIRES), page(2, EXPIRES)], now)).toEqual([]);
+  });
+
+  it('ignores pages whose urls carry no expiry', () => {
+    expect(expiredChapterIds([page(1, null)], Date.now())).toEqual([]);
   });
 });

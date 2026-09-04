@@ -210,3 +210,95 @@ const KEY_MAP: Record<string, ReaderAction> = {
 export function keyToReaderAction(key: string): ReaderAction | null {
   return KEY_MAP[key] ?? null;
 }
+
+/** Query parameter used to bust a failed image load. Stripped by the
+ *  `mpimg://` scheme handler in `src-tauri/src/lib.rs` before the URL is
+ *  forwarded to the CDN, so the signed query the CDN checks is
+ *  unchanged. Keep the two in sync. */
+export const RETRY_PARAM = 'mpretry';
+
+/**
+ * Build the `<img src>` for a page, given how many reload attempts it
+ * has taken. Attempt 0 is the untouched proxied URL.
+ *
+ * This MUST be a query parameter, not a fragment. A fragment is never
+ * sent to a URL loader, so the Rust scheme handler cannot see it, and
+ * WebKit drops the fragment when computing its memory-cache key — so a
+ * fragment-only change resolves to the same already-failed resource and
+ * the load short-circuits instead of re-requesting. A query parameter
+ * changes the resource identity the loader and cache actually key on.
+ *
+ * Note that a changed src alone is still not enough to recover a broken
+ * `<img>`: WebKit also remembers the failed load on the element itself.
+ * The reader keys its `{#each}` on the attempt count so the element is
+ * recreated, which is what leaving the chapter and coming back does.
+ */
+export function retryImageSrc(base: string, attempt: number): string {
+  if (!base || attempt <= 0) return base;
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}${RETRY_PARAM}=${attempt}`;
+}
+
+/** Query parameter carrying the signed URL's hard expiry, in unix
+ *  seconds. MANGA Plus CDN URLs are signed *and* time-limited — once
+ *  `expires` passes, the CDN answers 410 Gone and no amount of retrying
+ *  the same URL will ever succeed. Fresh URLs come only from another
+ *  `get_chapter_pages` call. */
+export const EXPIRES_PARAM = 'expires';
+
+/**
+ * Read the expiry (unix seconds) out of a signed CDN URL, or null when
+ * the URL carries no usable `expires`. Parsed by hand rather than with
+ * `URL` so this stays pure and works on the `mpimg://` form too.
+ */
+export function urlExpiresAt(url: string): number | null {
+  const q = url.indexOf('?');
+  if (q < 0) return null;
+  for (const part of url.slice(q + 1).split('&')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq) !== EXPIRES_PARAM) continue;
+    const n = Number(part.slice(eq + 1));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  return null;
+}
+
+/**
+ * True when a signed CDN URL is past its expiry, or close enough that a
+ * fetch started now would likely lose the race.
+ *
+ * `skewSeconds` covers both clock drift against the CDN and the gap
+ * between deciding to load and the request actually landing. A URL with
+ * no `expires` is never considered expired — we can't know, and treating
+ * it as dead would break any unsigned/cached URL.
+ */
+export function isUrlExpired(url: string, nowMs = Date.now(), skewSeconds = 60): boolean {
+  const exp = urlExpiresAt(url);
+  if (exp == null) return false;
+  return exp - skewSeconds <= Math.floor(nowMs / 1000);
+}
+
+/**
+ * Chapter ids whose loaded page URLs have expired, in first-seen order.
+ *
+ * Used on resume: after the laptop wakes, every URL the reader is
+ * holding may be dead at once, and refreshing per-chapter is far cheaper
+ * than letting each `<img>` discover its own 410.
+ */
+export function expiredChapterIds(
+  pages: LoadedPage[],
+  nowMs = Date.now(),
+  skewSeconds = 60,
+): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const p of pages) {
+    if (seen.has(p.chapterId)) continue;
+    if (isUrlExpired(p.mp.imageUrl, nowMs, skewSeconds)) {
+      seen.add(p.chapterId);
+      out.push(p.chapterId);
+    }
+  }
+  return out;
+}

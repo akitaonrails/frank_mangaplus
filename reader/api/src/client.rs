@@ -63,6 +63,26 @@ pub const DEFAULT_IMAGE_RETRY_BACKOFF_MS: u64 = 250;
 /// breathing room.
 pub const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
 
+/// How long an idle pooled connection may be reused. Deliberately
+/// short: after the machine suspends (lid closed) or sits idle, every
+/// pooled TCP connection is dead, but the local kernel does not know
+/// it — reusing one means writing a request into a socket that will
+/// never answer. Expiring idle connections aggressively means we dial
+/// fresh after a resume instead.
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Ceiling on a single request, connect included. Without this a dead
+/// pooled connection hangs until the OS TCP timeout (~15 min). That is
+/// worse than it sounds: a hung image fetch holds an `image_gate`
+/// permit the whole time, and once all permits are parked, every later
+/// fetch — including a user's retry — blocks before it can even start.
+/// A hang is also not an error, so `fetch_image`'s retry loop never
+/// runs. Generous enough for a large page on a slow link.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Ceiling on connection establishment alone.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Cap on the exponential shift in [`backoff_delay_ms`]. A shift of 8
 /// means base × 256, so with the default 250 ms base the longest
 /// single retry sleep is ~64 s — long enough to ride out a brief CDN
@@ -155,6 +175,12 @@ impl Client {
         let http = reqwest::Client::builder()
             .user_agent("okhttp/4.12.0")
             .cookie_store(true)
+            // See the constants: no timeout at all means a
+            // suspend-stalled connection parks an image_gate permit
+            // indefinitely and the reader never recovers.
+            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .build()?;
         // Cap the semaphore at the configured concurrency. Zero would
         // be a deadlock; floor it at 1 to be safe.
