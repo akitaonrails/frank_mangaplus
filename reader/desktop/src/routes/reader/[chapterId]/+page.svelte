@@ -384,6 +384,26 @@
     return out;
   }
 
+  // Absolute index in loadedPages -> 1-based page number within its own
+  // chapter. The reload overlay has to agree with the progress bar,
+  // which counts per chapter (pageInChapter); labelling the overlay with
+  // the absolute index made it announce "Reload page 63" while the bar
+  // read "Page 18 of 45" as soon as the reader had scrolled past a
+  // chapter boundary. Built in one pass rather than calling
+  // scanChapterBounds per rendered group, which would be quadratic.
+  let pageNumberInChapter: number[] = $derived.by(() => {
+    const out = new Array<number>(loadedPages.length);
+    let n = 0;
+    let prev: number | null = null;
+    for (let i = 0; i < loadedPages.length; i++) {
+      const cid = loadedPages[i].chapterId;
+      n = cid === prev ? n + 1 : 1;
+      prev = cid;
+      out[i] = n;
+    }
+    return out;
+  });
+
   // Pages bundled into render frames. See lib/readerLogic.ts for the
   // pure grouping logic + its unit tests.
   let pageGroups: PageGroup[] = $derived(buildPageGroups(loadedPages, pageMode));
@@ -1150,7 +1170,7 @@
               <div class="page-image-wrapper">
                 <img
                   src={imageSrc(lp.mp.imageUrl)}
-                  alt="Page {group.firstPageIndex + pi + 1}"
+                  alt="Page {pageNumberInChapter[group.firstPageIndex + pi] ?? group.firstPageIndex + pi + 1}"
                   width={lp.mp.width || 836}
                   height={lp.mp.height || 1200}
                   loading={group.firstPageIndex + pi < 3 ? 'eager' : 'lazy'}
@@ -1164,10 +1184,10 @@
                   <button
                     class="image-retry-btn"
                     type="button"
-                    aria-label="Retry loading page {group.firstPageIndex + pi + 1}"
+                    aria-label="Retry loading page {pageNumberInChapter[group.firstPageIndex + pi] ?? group.firstPageIndex + pi + 1}"
                     onclick={(e) => { e.stopPropagation(); retryImage(lp.mp.imageUrl); }}
                   >
-                    ↻ Reload page {group.firstPageIndex + pi + 1}
+                    ↻ Reload page {pageNumberInChapter[group.firstPageIndex + pi] ?? group.firstPageIndex + pi + 1}
                   </button>
                 {/if}
               </div>
