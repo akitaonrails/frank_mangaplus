@@ -29,6 +29,7 @@
     chapterIdBefore,
     findGroupContainingPage,
     firstGroupOfChapter,
+    imgLoadingMode,
     isSubscriptionLockError,
     keyToReaderAction,
     type LoadedPage,
@@ -1081,7 +1082,7 @@
                   alt="Page {group.firstPageIndex + pi + 1}"
                   width={lp.mp.width || 836}
                   height={lp.mp.height || 1200}
-                  loading={group.firstPageIndex + pi < 3 ? 'eager' : 'lazy'}
+                  loading={imgLoadingMode(group.firstPageIndex + pi, currentPageIndex)}
                   decoding="async"
                   class="manga-page"
                   class:failed={failedImageUrls.has(lp.mp.imageUrl)}

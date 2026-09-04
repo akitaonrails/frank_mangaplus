@@ -211,6 +211,30 @@ export function keyToReaderAction(key: string): ReaderAction | null {
   return KEY_MAP[key] ?? null;
 }
 
+// ---------- image preloading ----------
+
+// Sliding eager-load window around the reading position. Browser-native
+// lazy loading only starts a fetch when the image is nearly on screen —
+// with full-viewport page frames and flip/jump navigation that meant
+// the reader routinely landed on a placeholder and had to wait. Pages
+// inside the window get loading="eager" so they fetch immediately;
+// far-away pages stay lazy so opening a chapter doesn't pull the whole
+// title's worth of super_high images at once. Flipping an <img> from
+// lazy to eager mid-life triggers its load per the HTML spec, so the
+// window follows the reader as currentPageIndex advances.
+export const PRELOAD_AHEAD = 10;
+export const PRELOAD_BEHIND = 3;
+
+export function imgLoadingMode(
+  pageIndex: number,
+  currentPageIndex: number,
+): 'eager' | 'lazy' {
+  return pageIndex >= currentPageIndex - PRELOAD_BEHIND &&
+    pageIndex <= currentPageIndex + PRELOAD_AHEAD
+    ? 'eager'
+    : 'lazy';
+}
+
 // ---------- subscription-locked chapters ----------
 
 /** Chapter.chapterType → the label of the paywall badge, or null for

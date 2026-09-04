@@ -7,6 +7,9 @@ import {
   chapterLockLabel,
   findGroupContainingPage,
   firstGroupOfChapter,
+  imgLoadingMode,
+  PRELOAD_AHEAD,
+  PRELOAD_BEHIND,
   isSubscriptionLockError,
   keyToReaderAction,
   type LoadedPage,
@@ -270,6 +273,28 @@ describe('keyToReaderAction', () => {
     expect(keyToReaderAction('Tab')).toBe(null);
     // Case sensitivity: only 'd'/'D' are mapped, not other casings.
     expect(keyToReaderAction('e')).toBe(null);
+  });
+});
+
+describe('imgLoadingMode', () => {
+  it('eager-loads the window around the reading position', () => {
+    expect(imgLoadingMode(20, 20)).toBe('eager'); // current page
+    expect(imgLoadingMode(20 + PRELOAD_AHEAD, 20)).toBe('eager'); // window edge ahead
+    expect(imgLoadingMode(20 - PRELOAD_BEHIND, 20)).toBe('eager'); // window edge behind
+  });
+
+  it('keeps far-away pages lazy', () => {
+    expect(imgLoadingMode(20 + PRELOAD_AHEAD + 1, 20)).toBe('lazy');
+    expect(imgLoadingMode(20 - PRELOAD_BEHIND - 1, 20)).toBe('lazy');
+    expect(imgLoadingMode(60, 0)).toBe('lazy');
+  });
+
+  it('covers the start of a freshly opened chapter', () => {
+    // On mount currentPageIndex is 0 — the first pages must all be
+    // eager so the reader never opens onto a placeholder.
+    for (let i = 0; i <= PRELOAD_AHEAD; i++) {
+      expect(imgLoadingMode(i, 0)).toBe('eager');
+    }
   });
 });
 
