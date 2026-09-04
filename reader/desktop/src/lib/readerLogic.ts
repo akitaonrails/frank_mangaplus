@@ -238,3 +238,67 @@ export function retryImageSrc(base: string, attempt: number): string {
   const sep = base.includes('?') ? '&' : '?';
   return `${base}${sep}${RETRY_PARAM}=${attempt}`;
 }
+
+/** Query parameter carrying the signed URL's hard expiry, in unix
+ *  seconds. MANGA Plus CDN URLs are signed *and* time-limited — once
+ *  `expires` passes, the CDN answers 410 Gone and no amount of retrying
+ *  the same URL will ever succeed. Fresh URLs come only from another
+ *  `get_chapter_pages` call. */
+export const EXPIRES_PARAM = 'expires';
+
+/**
+ * Read the expiry (unix seconds) out of a signed CDN URL, or null when
+ * the URL carries no usable `expires`. Parsed by hand rather than with
+ * `URL` so this stays pure and works on the `mpimg://` form too.
+ */
+export function urlExpiresAt(url: string): number | null {
+  const q = url.indexOf('?');
+  if (q < 0) return null;
+  for (const part of url.slice(q + 1).split('&')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq) !== EXPIRES_PARAM) continue;
+    const n = Number(part.slice(eq + 1));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  return null;
+}
+
+/**
+ * True when a signed CDN URL is past its expiry, or close enough that a
+ * fetch started now would likely lose the race.
+ *
+ * `skewSeconds` covers both clock drift against the CDN and the gap
+ * between deciding to load and the request actually landing. A URL with
+ * no `expires` is never considered expired — we can't know, and treating
+ * it as dead would break any unsigned/cached URL.
+ */
+export function isUrlExpired(url: string, nowMs = Date.now(), skewSeconds = 60): boolean {
+  const exp = urlExpiresAt(url);
+  if (exp == null) return false;
+  return exp - skewSeconds <= Math.floor(nowMs / 1000);
+}
+
+/**
+ * Chapter ids whose loaded page URLs have expired, in first-seen order.
+ *
+ * Used on resume: after the laptop wakes, every URL the reader is
+ * holding may be dead at once, and refreshing per-chapter is far cheaper
+ * than letting each `<img>` discover its own 410.
+ */
+export function expiredChapterIds(
+  pages: LoadedPage[],
+  nowMs = Date.now(),
+  skewSeconds = 60,
+): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const p of pages) {
+    if (seen.has(p.chapterId)) continue;
+    if (isUrlExpired(p.mp.imageUrl, nowMs, skewSeconds)) {
+      seen.add(p.chapterId);
+      out.push(p.chapterId);
+    }
+  }
+  return out;
+}

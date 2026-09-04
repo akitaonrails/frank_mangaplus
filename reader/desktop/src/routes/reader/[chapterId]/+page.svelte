@@ -31,6 +31,8 @@
     firstGroupOfChapter,
     keyToReaderAction,
     retryImageSrc,
+    isUrlExpired,
+    expiredChapterIds,
     type LoadedPage,
     type PageGroup,
   } from '$lib/readerLogic';
@@ -216,6 +218,15 @@
   }
 
   function onImageError(url: string) {
+    // An expired signed URL is permanently dead (410 Gone). Spending the
+    // retry budget on it accomplishes nothing; only fresh URLs help.
+    if (isUrlExpired(url)) {
+      const owner = chapterIdForImage(url);
+      if (owner != null) {
+        void refreshChapterPages(owner);
+        return;
+      }
+    }
     const attempts = imageAttempts.get(url) ?? 0;
     if (attempts >= MAX_AUTO_RETRIES) {
       // Auto-retry budget exhausted. Show the manual hatch.
@@ -251,6 +262,15 @@
   }
 
   function retryImage(url: string) {
+    // Same as the auto path: a dead URL needs re-signing, not another
+    // request. This is the button the user pressed that "did nothing".
+    if (isUrlExpired(url)) {
+      const owner = chapterIdForImage(url);
+      if (owner != null) {
+        void refreshChapterPages(owner);
+        return;
+      }
+    }
     // Manual retry beyond the auto-budget — bump attempts and clear
     // failure so the overlay disappears while the new fetch is in
     // flight. If THIS attempt fails too, onImageError sees attempts
@@ -263,6 +283,81 @@
     }
     imageAttempts = new Map(imageAttempts).set(url, attempts);
     failedImageUrls = setWithoutStr(failedImageUrls, url);
+  }
+
+  // Chapters currently being re-signed. A screenful of simultaneously
+  // expired <img> elements would otherwise fire a dozen identical
+  // get_chapter_pages calls.
+  const refreshingChapterIds = new Set<number>();
+
+  /** The chapter that owns a page URL, or null once it has been replaced. */
+  function chapterIdForImage(url: string): number | null {
+    return loadedPages.find(lp => lp.mp.imageUrl === url)?.chapterId ?? null;
+  }
+
+  /**
+   * Replace a chapter's page URLs in place with freshly signed ones.
+   *
+   * MANGA Plus CDN URLs carry a hard `expires`; once it passes the CDN
+   * answers 410 Gone, and retrying the same URL can never succeed no
+   * matter how correct the retry plumbing is. This is why leaving the
+   * chapter and re-entering was the only recovery anyone ever found —
+   * that path calls get_chapter_pages, which mints new URLs. Do the same
+   * thing here, without losing scroll position.
+   */
+  async function refreshChapterPages(chapterId: number) {
+    if (refreshingChapterIds.has(chapterId)) return;
+    refreshingChapterIds.add(chapterId);
+    try {
+      const res = await fetchChapter(chapterId);
+      if (!res.ok) {
+        console.warn(`[reader] URL refresh for chapter ${chapterId} failed:`, res.error);
+        return;
+      }
+      const fresh = (res.viewer.pages ?? [])
+        .map(p => p.data?.mangaPage)
+        .filter((mp): mp is MangaPage => !!mp);
+      if (fresh.length === 0) return;
+
+      // Positional swap: the CDN re-signs the same pages in the same
+      // order, so page N of the refetch is page N of what we hold. A
+      // short response leaves the tail untouched rather than truncating.
+      let i = 0;
+      const staleUrls: string[] = [];
+      loadedPages = loadedPages.map(lp => {
+        if (lp.chapterId !== chapterId) return lp;
+        const next = fresh[i++];
+        if (!next) return lp;
+        staleUrls.push(lp.mp.imageUrl);
+        return { ...lp, mp: next };
+      });
+      if (staleUrls.length === 0) return;
+
+      // The new URLs must start from a clean slate — inheriting an
+      // exhausted retry budget would leave them stuck behind the same
+      // overlay the dead URLs were.
+      const attempts = new Map(imageAttempts);
+      const failed = new Set(failedImageUrls);
+      for (const url of staleUrls) {
+        const timer = imageRetryTimers.get(url);
+        if (timer) clearTimeout(timer);
+        imageRetryTimers.delete(url);
+        attempts.delete(url);
+        failed.delete(url);
+      }
+      imageAttempts = attempts;
+      failedImageUrls = failed;
+    } finally {
+      refreshingChapterIds.delete(chapterId);
+    }
+  }
+
+  // After a lid close the entire stack of signed URLs can be dead at
+  // once. Refresh when the window comes back rather than making every
+  // lazy <img> discover its own 410 one at a time.
+  function onVisibilityChange() {
+    if (document.visibilityState !== 'visible') return;
+    for (const id of expiredChapterIds(loadedPages)) void refreshChapterPages(id);
   }
 
   function reloadAllImages() {
@@ -394,12 +489,14 @@
     eyeFilter = getEyeFilter();
     window.addEventListener('keydown', onKey);
     window.addEventListener('mousemove', onBarMouseMove);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     // Bars start visible so the user can orient, then collapse.
     scheduleBarHide('top');
     scheduleBarHide('bottom');
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousemove', onBarMouseMove);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       observer?.disconnect();
     };
   });
