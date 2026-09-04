@@ -210,3 +210,30 @@ const KEY_MAP: Record<string, ReaderAction> = {
 export function keyToReaderAction(key: string): ReaderAction | null {
   return KEY_MAP[key] ?? null;
 }
+
+// ---------- subscription-locked chapters ----------
+
+/** Chapter.chapterType → the label of the paywall badge, or null for
+ *  freely readable chapters. Enum values from ChapterOuterClass.java
+ *  (v2.3.0): 0 FREE, 1 FREE_FOR_FIRST_TIME, 2 STANDARD, 3 DELUXE,
+ *  4 LOCKED_AFTER_FREE_READ. The badge names the MANGA Plus MAX tier
+ *  that unlocks the chapter — whether the *user's* plan covers it is
+ *  only known server-side, so this is informational, not a hard gate. */
+export function chapterLockLabel(chapterType: number | undefined): string | null {
+  switch (chapterType) {
+    case 2: return 'MAX';
+    case 3: return 'MAX Deluxe';
+    case 4: return 'Locked';
+    default: return null;
+  }
+}
+
+/** True when an API error message is the server refusing a
+ *  subscription-locked chapter to an account whose plan doesn't cover
+ *  it. Live-observed as english_popup "Invalid user: Invalid user
+ *  access(11301)" (e.g. free/basic plan opening a DELUXE Bleach
+ *  chapter). The reader shows a friendly paywall explanation for this
+ *  instead of the raw error + useless Retry. */
+export function isSubscriptionLockError(message: string): boolean {
+  return /invalid user access\(11301\)/i.test(message);
+}

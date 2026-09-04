@@ -28,6 +28,8 @@ fn extract_data(bytes: &[u8]) -> success_result::Data {
 const SEARCH_ENG: &[u8] = include_bytes!("fixtures/search_eng.bin");
 const PROFILE: &[u8] = include_bytes!("fixtures/profile.bin");
 const ERROR_INVALID_PARAMETER: &[u8] = include_bytes!("fixtures/error_invalid_parameter.bin");
+const ERROR_SUBSCRIPTION_LOCKED: &[u8] = include_bytes!("fixtures/error_subscription_locked.bin");
+const SUBSCRIPTION_VIEW_DELUXE: &[u8] = include_bytes!("fixtures/subscription_view_deluxe.bin");
 const FAVORITES_4: &[u8] = include_bytes!("fixtures/favorites_4_titles.bin");
 const TITLE_DETAIL_OP: &[u8] = include_bytes!("fixtures/title_detail_one_piece.bin");
 const MANGA_VIEWER_OP_CH1: &[u8] = include_bytes!("fixtures/manga_viewer_op_ch1.bin");
@@ -142,6 +144,42 @@ fn error_response_decodes_to_error_variant() {
         Some(response::Result::Success(_)) => panic!("expected Error variant"),
         None => panic!("missing result oneof"),
     }
+}
+
+#[test]
+fn subscription_locked_error_carries_english_popup() {
+    // Captured from manga_viewer_v3 on a DELUXE-typed Bleach chapter
+    // with a basic-plan account (2026-09-04). Guards the english_popup
+    // (field 2) transcription — before it was declared, this refusal
+    // surfaced as a bare "action=0" with no human-readable text.
+    use proto::response;
+    let resp = proto::Response::decode(ERROR_SUBSCRIPTION_LOCKED).expect("decode");
+    let err = match resp.result {
+        Some(response::Result::Error(e)) => e,
+        _ => panic!("expected Error variant"),
+    };
+    let popup = err.english_popup.expect("english_popup decoded");
+    assert_eq!(popup.subject, "Invalid user");
+    assert_eq!(popup.body, "Invalid user access(11301)");
+}
+
+#[test]
+fn subscription_view_carries_plan_and_payment_date() {
+    // Captured from GET /api/subscription right after a deluxe restore
+    // (2026-09-04). Guards the SuccessResult field-36 transcription and
+    // UserSubscription's plan_type/next_payment_date field numbers —
+    // the desktop's plan-drop warning depends on both.
+    let data = extract_data(SUBSCRIPTION_VIEW_DELUXE);
+    let view = match data {
+        success_result::Data::SubscriptionView(v) => v,
+        other => panic!(
+            "expected SubscriptionView (field 36), got variant {:?}",
+            std::mem::discriminant(&other)
+        ),
+    };
+    let sub = view.user_subscription.expect("user_subscription set");
+    assert_eq!(sub.plan_type, "deluxe");
+    assert_eq!(sub.next_payment_date, 1_790_948_452);
 }
 
 #[test]

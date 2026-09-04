@@ -20,6 +20,14 @@ export type Chapter = {
   // wired through so we can light it up without another type change.
   thumbnailUrl: string;
   isUpdated: boolean;
+  // ChapterOuterClass.ChapterType enum (v2.3.0): 0 FREE,
+  // 1 FREE_FOR_FIRST_TIME, 2 STANDARD, 3 DELUXE,
+  // 4 LOCKED_AFTER_FREE_READ. 2/3 need the matching MANGA Plus MAX
+  // subscription tier; the server refuses them with "Invalid user
+  // access(11301)" otherwise. See chapterLockLabel in readerLogic.ts.
+  // Optional: cached payloads written before this field was decoded
+  // don't carry it.
+  chapterType?: number;
 };
 
 export type TitleDetailView = {
@@ -61,6 +69,23 @@ export type MangaViewer = {
   titleId: number;
   startFromRight: boolean;
   titleLanguage: string;
+};
+
+// GET /api/subscription — the account's current plan. Polled by the
+// home page to warn when the server-side plan silently drops (a stale
+// Play receipt downgrades the account to "basic" with no other signal).
+export type UserSubscription = {
+  // "basic" | "standard" | "deluxe" (empty string possible on some
+  // endpoints; treat unknown values as basic).
+  planType: string;
+  // Unix seconds. The end of the currently-attested billing period.
+  nextPaymentDate: number;
+  isFreeTrial: boolean;
+  isPendingDowngrade: boolean;
+};
+
+export type SubscriptionView = {
+  userSubscription?: UserSubscription;
 };
 
 // /title_list/bookmark returns this despite the endpoint URL saying

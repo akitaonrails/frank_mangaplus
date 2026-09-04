@@ -36,5 +36,6 @@
 - `MANGAPLUS_SECRET` overrides the on-disk secret. Without an env/config secret, startup auto-registers a free-tier device and writes local config under the platform config dir.
 - Image/cache data lives under XDG-style cache dirs such as `~/.cache/mangaplus-reader/`; local secret/render config lives under `~/.config/mangaplus-reader/` on Linux.
 - The full-catalog SWR cache (`all_titles_<lang>_<clang>.bin` + `.meta.json` in the cache dir) defaults to a 24h TTL; `MANGAPLUS_CATALOG_TTL_HOURS=N` overrides it.
+- The server-side subscription plan (`basic`/`standard`/`deluxe`) can silently lapse to `basic`; MAX-tier chapters then refuse with "Invalid user access(11301)". The Library page polls `get_subscription` and warns; the restore ritual (rooted AVD + official app) is in `reader/docs/android-secret.md`. The desktop cannot restore by itself — `subscription_restore` needs a Google-signed Play receipt.
 - Linux render mode is decided before WebKit starts: `MANGAPLUS_RENDER_MODE` wins, then `~/.config/mangaplus-reader/render.conf`, then crash-recovery marker, then GPU/display auto-detect. See `docs/troubleshooting.md` before changing this path.
 - For UI/Svelte route changes, run a dev-server check or `./verify.sh`; production build alone may not catch style-chunk extraction failures.

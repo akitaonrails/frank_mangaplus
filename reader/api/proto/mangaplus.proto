@@ -36,10 +36,35 @@ message SuccessResult {
     ProfileSettingsView  profile_settings_view  = 13;
     // SEARCH_VIEW_FIELD_NUMBER = 35
     SearchView           search_view            = 35;
+    // SUBSCRIPTION_VIEW_FIELD_NUMBER = 36. Returned by GET /api/subscription.
+    // Carries the account's current plan — the desktop app polls it to
+    // warn when the plan silently drops (observed 2026-09: a lapsed
+    // Play renewal downgraded the account to "basic" server-side with
+    // no client-visible signal until DELUXE chapters started refusing).
+    SubscriptionView     subscription_view      = 36;
     // FAVORITE_TITLES_VIEW_FIELD_NUMBER = 43 — kept for reference;
     // /title_list/bookmark does NOT use this despite the name pun.
     FavoriteTitlesView   favorite_titles_view   = 43;
   }
+}
+
+// Source: SubscriptionViewOuterClass.java.
+// USER_SUBSCRIPTION_FIELD_NUMBER = 1. planTypes(2), subscriptionTitles(3),
+// userHasUsedTrial(4), banner(5), planBoxDescription(6), note(7) are
+// omitted — the desktop app only needs the account's own plan.
+message SubscriptionView {
+  UserSubscription user_subscription = 1;
+}
+
+// Source: SubscriptionOuterClass.java (UserSubscription).
+// PLAN_TYPE_FIELD_NUMBER=1 (a string: "basic" | "standard" | "deluxe"),
+// NEXT_PAYMENT_DATE_FIELD_NUMBER=2 (unix seconds), IS_FREE_TRIAL=3,
+// IS_PENDING_DOWNGRADE=4. isFirstTimeUser(5) omitted.
+message UserSubscription {
+  string plan_type            = 1;
+  uint32 next_payment_date    = 2;
+  bool   is_free_trial        = 3;
+  bool   is_pending_downgrade = 4;
 }
 
 // Source: RegistrationDataOuterClass.java.
@@ -49,12 +74,24 @@ message RegistrationData {
 }
 
 // Source: ErrorResultOuterClass.java line 602.
-// ACTION_FIELD_NUMBER=1, DEBUG_INFO_FIELD_NUMBER=4.
-// englishPopup(2), spanishPopup(3), popups(5) are omitted; we only need
-// enough to surface a generic error message in the UI.
+// ACTION_FIELD_NUMBER=1, ENGLISH_POPUP_FIELD_NUMBER=2, DEBUG_INFO_FIELD_NUMBER=4.
+// spanishPopup(3) and popups(5) stay omitted — the English popup is the
+// one the UI surfaces. english_popup carries the server's actual
+// human-readable refusal (e.g. "Invalid user access(11301)" on
+// subscription-locked chapters); before it was decoded, those errors
+// rendered as a bare "action=0" with no explanation.
 message ErrorResult {
-  int32  action     = 1;
-  string debug_info = 4;
+  int32      action        = 1;
+  ErrorPopup english_popup = 2;
+  string     debug_info    = 4;
+}
+
+// Subset of PopupOuterClass.Popup.OSDefault: SUBJECT_FIELD_NUMBER=1,
+// BODY_FIELD_NUMBER=2. Button/action fields are omitted — the desktop
+// UI renders its own error affordances.
+message ErrorPopup {
+  string subject = 1;
+  string body    = 2;
 }
 
 // Source: ProfileSettingsViewOuterClass.java.

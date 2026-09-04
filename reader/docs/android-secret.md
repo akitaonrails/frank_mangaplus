@@ -314,6 +314,59 @@ If the AVD is still set up, just boot it again, open MANGA Plus, optionally tap
 
 ---
 
+## Keeping the subscription attached (the plan-drop problem)
+
+The `deviceSecret` itself never expires — but the **subscription tier the
+server associates with it does lapse**. Learned the hard way on 2026-09-04:
+
+- The server's entitlement is backed by a **Google Play receipt** that only
+  the official app can submit (`PUT /api/subscription_restore` requires
+  `purchase_data` plus a Google Play **signature** — it cannot be forged or
+  replayed by the desktop reader).
+- Google keeps auto-renewing on the Play side, but if no app ever refreshes
+  the receipt with Shueisha's server, the attested billing period runs out
+  and the server **silently downgrades the account to `basic`**.
+- Symptom: MAX-tier chapters (e.g. all of Bleach past chapter 3, marked
+  `DELUXE` in the API's `chapter_type`) start refusing with
+  `Invalid user access(11301)`, while free chapters keep working. Nothing
+  else looks broken.
+
+The desktop reader polls `GET /api/subscription` (at most twice a day, from
+the Library page) and shows an amber warning banner when the plan drops below
+the best plan it has seen, or when the billing period ends without renewing.
+Plan tiers, lowest to highest: `basic` → `standard` → `deluxe`. Note that
+Bleach-class classic catalogs need **deluxe**, not standard.
+
+### The restore ritual (when the banner appears)
+
+1. Boot the AVD (see the DNS flag — required, see Troubleshooting):
+
+   ```sh
+   ANDROID_AVD_HOME=~/.config/.android/avd \
+     ~/Android/Sdk/emulator/emulator -avd mangaplus -no-snapshot-save \
+     -dns-server 8.8.8.8,1.1.1.1
+   ```
+
+2. Open MANGA Plus inside it (signed-in state persists in the AVD).
+3. Go to the MAX / subscription screen and tap **Restore subscription**.
+4. Verify from the host — plan should say your paid tier:
+
+   ```sh
+   curl -sS -A "okhttp/4.12.0" \
+     "https://jumpg-api.tokyo-cdn.com/api/subscription?os=android&os_ver=36&app_ver=250&secret=$(cat ~/.config/mangaplus-reader/secret)&country_code=US" \
+     | protoc --decode_raw | head -6
+   # field 36 → field 1 → 1: "deluxe"  ← plan_type
+   ```
+
+5. Kill the emulator (`adb -s emulator-5554 emu kill`). No desktop-side
+   change is needed: the restore re-attaches server-side to the same
+   `deviceSecret` the reader already uses.
+
+There is no need to re-extract the secret for a plan restore — the AVD app
+and the desktop reader share one device registration.
+
+---
+
 ## Troubleshooting
 
 **`emulator` complains "Unknown AVD name [mangaplus]"** — your
@@ -342,6 +395,26 @@ the right Google account is signed in (Step 7).
 **OneTrust banner fetch fails** — happens when mitmproxy is in the request
 path. For this workflow we don't need mitmproxy at all (we read the file
 directly), so just don't set an HTTP proxy on the AVD.
+
+**Emulator says "no internet" but `ping 8.8.8.8` works from its shell** —
+two distinct causes, both hit on 2026-09-04:
+
+1. *DNS*: the emulator inherits the host's `/etc/resolv.conf`. With
+   systemd-resolved that points at the loopback stub `127.0.0.53`, which is
+   unreachable from inside the guest. Always launch with
+   `-dns-server 8.8.8.8,1.1.1.1`.
+2. *Stale global HTTP proxy*: a previous mitmproxy session may have persisted
+   `http_proxy 10.0.2.2:8080` in the AVD's global settings. Android's
+   connectivity probes then fail with `Failed to connect to /10.0.2.2:8080`
+   (visible in `adb shell dumpsys network_stack`) while shell tools, which
+   ignore the proxy, work fine. Clear it and bounce Wi-Fi:
+
+   ```sh
+   adb -s emulator-5554 shell settings put global http_proxy :0
+   adb -s emulator-5554 shell settings delete global global_http_proxy_host
+   adb -s emulator-5554 shell settings delete global global_http_proxy_port
+   adb -s emulator-5554 shell "svc wifi disable; sleep 2; svc wifi enable"
+   ```
 
 ---
 

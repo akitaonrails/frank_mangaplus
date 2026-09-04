@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { SubscribedTitlesView, TitleDetailView } from './types';
+import type { SubscribedTitlesView, SubscriptionView, TitleDetailView } from './types';
 
 export function getTitleDetail(args: {
   titleId: number;
@@ -12,6 +12,10 @@ export function getTitleDetail(args: {
 
 export function getFavorites(): Promise<SubscribedTitlesView> {
   return invoke('get_favorites') as Promise<SubscribedTitlesView>;
+}
+
+export function getSubscription(countryCode: string): Promise<SubscriptionView> {
+  return invoke('get_subscription', { countryCode }) as Promise<SubscriptionView>;
 }
 
 export function addFavorite(titleId: number): Promise<void> {

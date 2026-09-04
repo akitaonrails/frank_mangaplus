@@ -29,6 +29,7 @@
     chapterIdBefore,
     findGroupContainingPage,
     firstGroupOfChapter,
+    isSubscriptionLockError,
     keyToReaderAction,
     type LoadedPage,
     type PageGroup,
@@ -108,6 +109,10 @@
   //                          before re-fetching.
   let prefetchingChapterIds: Set<number> = $state(new Set());
   let failedChapterIds: Set<number> = $state(new Set());
+  // Last error message per failed chapter id, so the footer block can
+  // distinguish "subscription-locked" (no point retrying) from
+  // transient network failures (retry offered).
+  let failedChapterErrors: Map<number, string> = $state(new Map());
   // Derived for the existing "loading next chapter…" indicator.
   let fetchingNext = $derived(prefetchingChapterIds.size > 0);
 
@@ -436,6 +441,7 @@
     titleDetailLoaded = false;
     prefetchingChapterIds = new Set();
     failedChapterIds = new Set();
+    failedChapterErrors = new Map();
     clearImageRetryTimers();
     imageAttempts = new Map();
     failedImageUrls = new Set();
@@ -601,7 +607,12 @@
     prefetchingChapterIds = setWith(prefetchingChapterIds, nextId);
     // On forced retry, clear any prior failure so the same chapter can
     // be revisited if it fails again.
-    if (force) failedChapterIds = setWithout(failedChapterIds, nextId);
+    if (force) {
+      failedChapterIds = setWithout(failedChapterIds, nextId);
+      const cleared = new Map(failedChapterErrors);
+      cleared.delete(nextId);
+      failedChapterErrors = cleared;
+    }
 
     const result = await fetchChapter(nextId);
 
@@ -613,6 +624,7 @@
       // (Load next / Retry button) clears the flag via force=true.
       console.warn(`[reader] next chapter ${nextId} failed: ${result.error}`);
       failedChapterIds = setWith(failedChapterIds, nextId);
+      failedChapterErrors = new Map(failedChapterErrors).set(nextId, result.error);
     }
   }
 
@@ -626,7 +638,13 @@
     const nextId = chapterIdAfter(allChapters, lastChId);
     if (nextId == null) return null;
     const name = allChapters.find(c => c.chapterId === nextId)?.name ?? '';
-    return { id: nextId, name, failed: failedChapterIds.has(nextId) };
+    const failed = failedChapterIds.has(nextId);
+    return {
+      id: nextId,
+      name,
+      failed,
+      locked: failed && isSubscriptionLockError(failedChapterErrors.get(nextId) ?? ''),
+    };
   });
 
   // Mark chapters as read as the user scrolls through them.
@@ -1002,8 +1020,23 @@
       <div class="spinner"></div>
     {:else if error}
       <div class="empty-state">
-        <p>{error}</p>
-        <p><button class="retry-btn" onclick={() => void loadInitial()}>↻ Retry</button></p>
+        {#if isSubscriptionLockError(error)}
+          <!-- Server refused the chapter for this account's plan.
+               Retrying can't help, so offer the way out instead. -->
+          <div class="locked-glyph" aria-hidden="true">🔒</div>
+          <p><strong>This chapter is subscription-locked.</strong></p>
+          <p class="locked-hint">
+            MANGA Plus marks it as a MAX-tier chapter and your current
+            plan doesn't include it, so the server refused the request.
+            Reading it needs the matching MANGA Plus MAX subscription on
+            the account your device secret belongs to.
+          </p>
+          <p class="locked-raw">{error}</p>
+          <p><button class="retry-btn" onclick={goBack}>← Back to title</button></p>
+        {:else}
+          <p>{error}</p>
+          <p><button class="retry-btn" onclick={() => void loadInitial()}>↻ Retry</button></p>
+        {/if}
       </div>
     {:else if loadedPages.length === 0}
       <div class="empty-state"><p>No pages found for this chapter.</p></div>
@@ -1107,6 +1140,17 @@
           <div class="loading-next">
             <div class="spinner"></div>
             <span>checking for more chapters…</span>
+          </div>
+        {:else if nextChapterInfo?.locked}
+          <!-- The next chapter is subscription-locked for this account's
+               plan — retrying is futile, so say why and stop cleanly. -->
+          <div class="prefetch-error prefetch-locked">
+            <p>🔒 <strong>{nextChapterInfo.name || 'The next chapter'}</strong> is subscription-locked.</p>
+            <p class="hint">
+              It's a MANGA Plus MAX-tier chapter and your current plan
+              doesn't include it, so the server refused the request.
+            </p>
+            <button class="retry-btn" onclick={goBack}>← Back to title</button>
           </div>
         {:else if nextChapterInfo?.failed}
           <!-- Previous prefetch failed (timeout, network, server error).
@@ -1574,6 +1618,33 @@
   .prefetch-error .hint {
     color: var(--text-muted);
     font-size: 0.85rem;
+  }
+
+  /* Subscription-locked variants: amber instead of error-red — the
+     server is working fine, the account's plan just doesn't cover the
+     chapter. */
+  .prefetch-error.prefetch-locked {
+    background: rgba(246, 193, 119, 0.08);
+    border-color: rgba(246, 193, 119, 0.4);
+  }
+
+  .locked-glyph {
+    font-size: 2.4rem;
+    line-height: 1;
+  }
+
+  .locked-hint {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    max-width: 440px;
+  }
+
+  .locked-raw {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    opacity: 0.7;
+    font-family: monospace;
   }
 
   .retry-btn {

@@ -460,6 +460,18 @@ async fn get_favorites(
 }
 
 #[tauri::command]
+async fn get_subscription(
+    state: tauri::State<'_, AppState>,
+    country_code: String,
+) -> Result<proto::SubscriptionView, String> {
+    let client = clone_client(&state)?;
+    client
+        .get_subscription(&country_code)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn add_favorite(
     state: tauri::State<'_, AppState>,
     title_id: u32,
@@ -992,6 +1004,7 @@ pub fn run() {
             set_secret,
             get_profile,
             get_favorites,
+            get_subscription,
             add_favorite,
             remove_favorite,
             search,

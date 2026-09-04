@@ -4,8 +4,10 @@ import {
   scanChapterBounds,
   chapterIdAfter,
   chapterIdBefore,
+  chapterLockLabel,
   findGroupContainingPage,
   firstGroupOfChapter,
+  isSubscriptionLockError,
   keyToReaderAction,
   type LoadedPage,
 } from './readerLogic';
@@ -268,5 +270,40 @@ describe('keyToReaderAction', () => {
     expect(keyToReaderAction('Tab')).toBe(null);
     // Case sensitivity: only 'd'/'D' are mapped, not other casings.
     expect(keyToReaderAction('e')).toBe(null);
+  });
+});
+
+describe('chapterLockLabel', () => {
+  it('labels the paid ChapterType values', () => {
+    expect(chapterLockLabel(2)).toBe('MAX');         // STANDARD
+    expect(chapterLockLabel(3)).toBe('MAX Deluxe');  // DELUXE
+    expect(chapterLockLabel(4)).toBe('Locked');      // LOCKED_AFTER_FREE_READ
+  });
+
+  it('returns null for freely readable chapters', () => {
+    expect(chapterLockLabel(0)).toBe(null);  // FREE
+    expect(chapterLockLabel(1)).toBe(null);  // FREE_FOR_FIRST_TIME
+    // Absent field (older cached payloads without chapterType).
+    expect(chapterLockLabel(undefined)).toBe(null);
+    // Unknown future enum values shouldn't fabricate a lock.
+    expect(chapterLockLabel(99)).toBe(null);
+  });
+});
+
+describe('isSubscriptionLockError', () => {
+  it('matches the live-observed 11301 refusal in any wrapping', () => {
+    // Exactly as the reader receives it after the ApiError Display pass.
+    expect(isSubscriptionLockError(
+      'API error: Invalid user: Invalid user access(11301) (action=0)'
+    )).toBe(true);
+    expect(isSubscriptionLockError('invalid user access(11301)')).toBe(true);
+  });
+
+  it('does not match other errors', () => {
+    expect(isSubscriptionLockError('Timed out after 12000ms')).toBe(false);
+    expect(isSubscriptionLockError('API error: maintenance (action=2)')).toBe(false);
+    expect(isSubscriptionLockError('')).toBe(false);
+    // A different numeric code must not be treated as the paywall.
+    expect(isSubscriptionLockError('Invalid user access(11302)')).toBe(false);
   });
 });
