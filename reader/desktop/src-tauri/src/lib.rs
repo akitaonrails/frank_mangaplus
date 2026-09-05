@@ -933,6 +933,37 @@ pub fn run() {
         "[mangaplus-reader] image cache: {}",
         image_cache_dir().display()
     );
+
+    // Prune the image cache in the background at startup. Every CDN
+    // fetch writes a cache file and nothing ever deleted them — a
+    // long-lived install grows without bound (observed: 4.8 GB / 10k
+    // files). Only the `title/` subtree is touched: the cache root is
+    // shared with the catalog SWR cache (all_titles_*.bin), which must
+    // survive. Oldest-mtime files go first, so recently read chapters
+    // stay warm. MANGAPLUS_IMAGE_CACHE_MAX_MB overrides the budget.
+    {
+        let budget_mb = std::env::var("MANGAPLUS_IMAGE_CACHE_MAX_MB")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(2048);
+        let images_dir = image_cache_dir().join("title");
+        std::thread::spawn(move || {
+            match mangaplus_api::cache_gc::prune_image_cache(&images_dir, budget_mb * 1024 * 1024) {
+                Ok(s) if s.files_removed > 0 => eprintln!(
+                    "[mangaplus-reader] image cache GC: removed {} files ({:.1} MB), {:.1} MB kept (budget {budget_mb} MB)",
+                    s.files_removed,
+                    s.bytes_removed as f64 / 1_048_576.0,
+                    (s.bytes_scanned - s.bytes_removed) as f64 / 1_048_576.0,
+                ),
+                Ok(s) => eprintln!(
+                    "[mangaplus-reader] image cache GC: {:.1} MB in {} files, within budget ({budget_mb} MB)",
+                    s.bytes_scanned as f64 / 1_048_576.0,
+                    s.files_scanned,
+                ),
+                Err(e) => eprintln!("[mangaplus-reader] image cache GC failed: {e}"),
+            }
+        });
+    }
     if secret.is_empty() {
         eprintln!("[mangaplus-reader] no deviceSecret configured — attempting fresh registration");
         secret = auto_register_secret();

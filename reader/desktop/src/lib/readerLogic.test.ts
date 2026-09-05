@@ -8,8 +8,11 @@ import {
   findGroupContainingPage,
   firstGroupOfChapter,
   imgLoadingMode,
+  isUrlExpired,
   PRELOAD_AHEAD,
   PRELOAD_BEHIND,
+  urlExpiresAt,
+  URL_EXPIRY_MARGIN_SECS,
   isSubscriptionLockError,
   keyToReaderAction,
   type LoadedPage,
@@ -295,6 +298,41 @@ describe('imgLoadingMode', () => {
     for (let i = 0; i <= PRELOAD_AHEAD; i++) {
       expect(imgLoadingMode(i, 0)).toBe('eager');
     }
+  });
+});
+
+describe('signed-URL expiry', () => {
+  // Real shape from the live CDN.
+  const URL =
+    'https://jumpg-assets3.tokyo-cdn.com/secure/title/100004/chapter/1000193/manga_page/super_high/1.webp?hash=UoqyznSTlmS2gPm6M6AAIQ&expires=1788559200';
+
+  it('extracts the expires param', () => {
+    expect(urlExpiresAt(URL)).toBe(1788559200);
+    // Works regardless of param order.
+    expect(urlExpiresAt('https://x/y.webp?expires=42&hash=abc')).toBe(42);
+  });
+
+  it('returns null when there is no expires param', () => {
+    expect(urlExpiresAt('https://x/y.webp?hash=abc')).toBe(null);
+    expect(urlExpiresAt('https://x/y.webp')).toBe(null);
+    // "expires" as a path fragment must not match.
+    expect(urlExpiresAt('https://x/expires=9/y.webp')).toBe(null);
+  });
+
+  it('flags URLs past their expiry', () => {
+    expect(isUrlExpired(URL, 1788559200 + 1)).toBe(true);
+    expect(isUrlExpired(URL, 1788559200)).toBe(true);
+  });
+
+  it('flags URLs inside the refresh margin as expired', () => {
+    // Refresh shortly BEFORE the deadline so an in-flight request
+    // can't get refused at the edge.
+    expect(isUrlExpired(URL, 1788559200 - URL_EXPIRY_MARGIN_SECS)).toBe(true);
+    expect(isUrlExpired(URL, 1788559200 - URL_EXPIRY_MARGIN_SECS - 1)).toBe(false);
+  });
+
+  it('never expires URLs without an expires param', () => {
+    expect(isUrlExpired('https://x/y.webp?hash=abc', Number.MAX_SAFE_INTEGER)).toBe(false);
   });
 });
 

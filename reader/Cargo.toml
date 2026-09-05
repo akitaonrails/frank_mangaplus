@@ -3,7 +3,7 @@ resolver = "2"
 members = ["api", "desktop/src-tauri"]
 
 [workspace.package]
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 authors = ["akitaonrails"]
 

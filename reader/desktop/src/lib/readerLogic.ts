@@ -235,6 +235,36 @@ export function imgLoadingMode(
     : 'lazy';
 }
 
+// ---------- signed-URL expiry ----------
+
+// Page image URLs are signed: `...webp?hash=...&expires=<unix seconds>`,
+// valid for roughly 1-2 hours after the manga_viewer_v3 call that
+// minted them. A reader left open (or a machine that slept) comes back
+// with URLs the CDN now refuses — and the plus_vw_token cookie premium
+// fetches need has gone equally stale. Retrying such a URL can never
+// succeed; the chapter has to be re-fetched to mint fresh signatures
+// (which also refreshes the cookie). These helpers let the reader tell
+// a transient blip (retry the same URL) from an expired signature
+// (refresh the chapter).
+
+export function urlExpiresAt(url: string): number | null {
+  const m = /[?&]expires=(\d+)/.exec(url);
+  if (!m) return null;
+  const n = Number.parseInt(m[1], 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// Refresh slightly before the deadline so an image that starts loading
+// near the edge doesn't get its request refused mid-flight.
+export const URL_EXPIRY_MARGIN_SECS = 300;
+
+/** True when the URL's signature is past (or within the margin of) its
+ *  expiry. URLs without an expires param never count as expired. */
+export function isUrlExpired(url: string, nowSecs: number): boolean {
+  const exp = urlExpiresAt(url);
+  return exp != null && nowSecs >= exp - URL_EXPIRY_MARGIN_SECS;
+}
+
 // ---------- subscription-locked chapters ----------
 
 /** Chapter.chapterType → the label of the paywall badge, or null for

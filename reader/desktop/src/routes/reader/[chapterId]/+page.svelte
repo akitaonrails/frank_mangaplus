@@ -31,6 +31,7 @@
     firstGroupOfChapter,
     imgLoadingMode,
     isSubscriptionLockError,
+    isUrlExpired,
     keyToReaderAction,
     type LoadedPage,
     type PageGroup,
@@ -216,6 +217,14 @@
   }
 
   function onImageError(url: string) {
+    // Expired signature: retrying the same URL is guaranteed to fail
+    // (the CDN refuses it and the plus_vw_token cookie is equally
+    // stale). Skip the retry ladder and re-fetch the chapter to mint
+    // fresh URLs — the {#each} key on imageUrl remounts the <img>s.
+    if (isUrlExpired(url, Math.floor(Date.now() / 1000))) {
+      void refreshChapterUrlsForImage(url);
+      return;
+    }
     const attempts = imageAttempts.get(url) ?? 0;
     if (attempts >= MAX_AUTO_RETRIES) {
       // Auto-retry budget exhausted. Show the manual hatch.
@@ -251,6 +260,13 @@
   }
 
   function retryImage(url: string) {
+    // Manual retry of an expired URL must mint fresh signatures, not
+    // re-request the dead one — this was the "reload button loads a
+    // broken placeholder" failure after long idle/sleep.
+    if (isUrlExpired(url, Math.floor(Date.now() / 1000))) {
+      void refreshChapterUrlsForImage(url);
+      return;
+    }
     // Manual retry beyond the auto-budget — bump attempts and clear
     // failure so the overlay disappears while the new fetch is in
     // flight. If THIS attempt fails too, onImageError sees attempts
@@ -267,16 +283,113 @@
 
   function reloadAllImages() {
     if (failedImageUrls.size === 0) return;
+    const nowSecs = Math.floor(Date.now() / 1000);
     const next = new Map(imageAttempts);
     for (const url of failedImageUrls) {
       const timer = imageRetryTimers.get(url);
       if (timer) clearTimeout(timer);
       imageRetryTimers.delete(url);
-      next.set(url, (next.get(url) ?? 0) + 1);
+      if (isUrlExpired(url, nowSecs)) {
+        // Dead signature — bumping the attempt counter would just
+        // re-request a URL the CDN refuses. Refresh its chapter.
+        void refreshChapterUrlsForImage(url);
+      } else {
+        next.set(url, (next.get(url) ?? 0) + 1);
+      }
     }
     imageAttempts = next;
     failedImageUrls = new Set();
   }
+
+  // ---------- signed-URL refresh (expiry recovery) ----------
+
+  // Chapters whose URL-refresh is currently in flight. Not $state —
+  // nothing renders from it; it only guards duplicate refreshes.
+  const refreshingChapterIds = new Set<number>();
+
+  /** Re-fetch one already-loaded chapter and swap its pages' freshly
+   *  signed URLs into loadedPages in place (positional match — page
+   *  order within a chapter is stable). Also refreshes the
+   *  plus_vw_token cookie as a side effect of the manga_viewer_v3
+   *  call. The {#each} blocks key images by URL, so swapped pages
+   *  remount their <img> elements and load cleanly. */
+  async function refreshChapterUrls(chapterId: number) {
+    if (refreshingChapterIds.has(chapterId)) return;
+    if (!loadedChapterIds.has(chapterId)) return;
+    refreshingChapterIds.add(chapterId);
+    try {
+      const result = await fetchChapter(chapterId);
+      if (!result.ok) {
+        console.warn(`[reader] URL refresh for chapter ${chapterId} failed: ${result.error}`);
+        return;
+      }
+      const freshPages = (result.viewer.pages ?? [])
+        .map(p => p.data?.mangaPage)
+        .filter((mp): mp is MangaPage => !!mp);
+      let i = 0;
+      const staleUrls: string[] = [];
+      loadedPages = loadedPages.map(lp => {
+        if (lp.chapterId !== chapterId) return lp;
+        const fresh = freshPages[i++];
+        if (!fresh || fresh.imageUrl === lp.mp.imageUrl) return lp;
+        staleUrls.push(lp.mp.imageUrl);
+        return { ...lp, mp: fresh };
+      });
+      // Drop retry bookkeeping for the replaced URLs — they can never
+      // be requested again, and the sets would otherwise grow with
+      // every refresh cycle over a long session.
+      if (staleUrls.length > 0) {
+        const attempts = new Map(imageAttempts);
+        const failed = new Set(failedImageUrls);
+        for (const url of staleUrls) {
+          const timer = imageRetryTimers.get(url);
+          if (timer) clearTimeout(timer);
+          imageRetryTimers.delete(url);
+          attempts.delete(url);
+          failed.delete(url);
+        }
+        imageAttempts = attempts;
+        failedImageUrls = failed;
+      }
+    } finally {
+      refreshingChapterIds.delete(chapterId);
+    }
+  }
+
+  /** Refresh the chapter that owns the given (stale) image URL. */
+  async function refreshChapterUrlsForImage(url: string) {
+    const owner = loadedPages.find(lp => lp.mp.imageUrl === url);
+    if (owner) await refreshChapterUrls(owner.chapterId);
+  }
+
+  /** Sweep every loaded chapter and re-sign the ones whose URLs are
+   *  expired (or inside the refresh margin). Cheap — integer compares
+   *  over loadedPages — so it's safe to run often. */
+  function refreshExpiredChapterUrls() {
+    const nowSecs = Math.floor(Date.now() / 1000);
+    const expiredChapters = new Set<number>();
+    for (const lp of loadedPages) {
+      if (!expiredChapters.has(lp.chapterId) && isUrlExpired(lp.mp.imageUrl, nowSecs)) {
+        expiredChapters.add(lp.chapterId);
+      }
+    }
+    for (const id of expiredChapters) void refreshChapterUrls(id);
+  }
+
+  /** Wake/foreground recovery: when the window becomes visible again
+   *  (returning from sleep, or refocusing after hours), proactively
+   *  re-sign expired chapters so pages re-render before the user ever
+   *  sees a broken placeholder. */
+  function onVisibilityChange() {
+    if (document.visibilityState === 'visible') refreshExpiredChapterUrls();
+  }
+
+  // Periodic backstop: visibilitychange doesn't fire when the machine
+  // sleeps with the window visible, and a slow read of a long chapter
+  // can outlive the ~1-2h signatures without any visibility event at
+  // all. A minutely sweep plus the URL_EXPIRY_MARGIN_SECS margin means
+  // chapters re-sign shortly before their URLs die, in every scenario.
+  const URL_SWEEP_INTERVAL_MS = 60_000;
 
   // String-keyed Set helpers — the existing setWith / setWithout are
   // typed for number (chapter ids); these mirror them for string URLs.
@@ -394,12 +507,16 @@
     eyeFilter = getEyeFilter();
     window.addEventListener('keydown', onKey);
     window.addEventListener('mousemove', onBarMouseMove);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    const urlSweepTimer = setInterval(refreshExpiredChapterUrls, URL_SWEEP_INTERVAL_MS);
     // Bars start visible so the user can orient, then collapse.
     scheduleBarHide('top');
     scheduleBarHide('bottom');
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousemove', onBarMouseMove);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      clearInterval(urlSweepTimer);
       observer?.disconnect();
     };
   });
