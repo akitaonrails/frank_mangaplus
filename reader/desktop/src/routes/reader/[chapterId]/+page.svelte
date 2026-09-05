@@ -36,7 +36,13 @@
     type PageGroup,
   } from '$lib/readerLogic';
   import { proxied } from '$lib/img';
-  import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
+  import {
+    chapterPagesRequestArgs,
+    contentLocaleFromSearchParams,
+    readerHref,
+    titleDetailHref,
+    titleDetailRequestArgs,
+  } from '$lib/contentLocale';
   import { withIpcTimeout } from '$lib/ipcTimeout';
   import { getTitleDetail } from '$lib/ipcCommands';
 
@@ -63,9 +69,10 @@
 
   // The reader inherits locale from the title page via URL params.
   // Defaults apply when navigating to a chapter URL directly.
-  let lang = $derived($page.url.searchParams.get('lang') ?? DEFAULT_LANG);
-  let clang = $derived($page.url.searchParams.get('clang') ?? DEFAULT_CLANG);
-  let country = $derived($page.url.searchParams.get('country') ?? DEFAULT_COUNTRY);
+  let locale = $derived(contentLocaleFromSearchParams($page.url.searchParams));
+  let lang = $derived(locale.lang);
+  let clang = $derived(locale.clang);
+  let country = $derived(locale.country);
 
   // ---------- state ----------
 
@@ -133,13 +140,10 @@
     const existing = chapterRequests.get(requestKey);
     if (existing) return existing;
 
-    const request = invoke<MangaViewer>('get_chapter_pages', {
-      chapterId,
-      imgQuality: 'super_high',
-      viewerMode: 'vertical',
-      clang,
-      countryCode: country,
-    }).finally(() => {
+    const request = invoke<MangaViewer>(
+      'get_chapter_pages',
+      chapterPagesRequestArgs(chapterId, clang, country),
+    ).finally(() => {
       chapterRequests.delete(requestKey);
     });
     chapterRequests.set(requestKey, request);
@@ -499,12 +503,9 @@
       // Kick off title_detail in the background to get the authoritative
       // chapter list. Doesn't block the user seeing the first pages.
       if (v.titleId) {
-        void withIpcTimeout(getTitleDetail({
-          titleId: v.titleId,
-          lang: activeLang,
-          clang: activeClang,
-          countryCode: activeCountry,
-        }))
+        void withIpcTimeout(getTitleDetail(
+          titleDetailRequestArgs(v.titleId, activeLang, activeClang, activeCountry),
+        ))
           .then(detail => {
             if (seq !== loadSeq) return;
             const canonical: Chapter[] =
@@ -857,11 +858,7 @@
         if (firstChId == null) return;
         const prevId = chapterIdBefore(allChapters, firstChId);
         if (prevId == null) return;
-        const qs = new URLSearchParams();
-        if (clang !== DEFAULT_CLANG) qs.set('clang', clang);
-        if (country !== DEFAULT_COUNTRY) qs.set('country', country);
-        const suffix = qs.toString();
-        goto(`/reader/${prevId}${suffix ? '?' + suffix : ''}`);
+        goto(readerHref(prevId, clang, country));
       }
     } finally {
       advancing = false;
@@ -903,8 +900,11 @@
   }
 
   function goBack() {
-    if (initialViewer) goto(`/title/${initialViewer.titleId}`);
-    else history.back();
+    if (!initialViewer) {
+      history.back();
+      return;
+    }
+    goto(titleDetailHref(initialViewer.titleId, clang, country));
   }
 
   // Click zones map to manga RTL: left half = forward (next), right

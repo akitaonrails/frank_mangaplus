@@ -11,16 +11,22 @@
   } from '$lib/readState';
   import { chapterLockLabel } from '$lib/readerLogic';
   import { proxied } from '$lib/img';
-  import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
+  import {
+    contentLocaleFromSearchParams,
+    contentLocaleSuffix,
+    readerHref,
+    titleDetailRequestArgs,
+  } from '$lib/contentLocale';
   import { withIpcTimeout } from '$lib/ipcTimeout';
   import { addFavorite, getFavorites, getTitleDetail, removeFavorite } from '$lib/ipcCommands';
 
-  // URL-controlled. Library cards encode the title's own language as a
-  // `?lang=` query param so e.g. a Portuguese title's detail view comes
-  // back in Portuguese. Falls back to the global default when absent.
-  let lang = $derived($page.url.searchParams.get('lang') ?? DEFAULT_LANG);
-  let clang = $derived($page.url.searchParams.get('clang') ?? DEFAULT_CLANG);
-  let country = $derived($page.url.searchParams.get('country') ?? DEFAULT_COUNTRY);
+  // URL-controlled. Library cards encode the title's content language as
+  // `?clang=` so the detail view returns the matching translated edition.
+  // Falls back to the global default when absent.
+  let locale = $derived(contentLocaleFromSearchParams($page.url.searchParams));
+  let lang = $derived(locale.lang);
+  let clang = $derived(locale.clang);
+  let country = $derived(locale.country);
 
   let titleId = $derived(Number.parseInt($page.params.id ?? '', 10));
 
@@ -70,13 +76,7 @@
 
   // Suffix appended to /reader/<id> links so the reader inherits this
   // page's locale. Derived from clang/country so reactivity stays clean.
-  let readerSuffix = $derived.by(() => {
-    const qs = new URLSearchParams();
-    if (clang !== DEFAULT_CLANG) qs.set('clang', clang);
-    if (country !== DEFAULT_COUNTRY) qs.set('country', country);
-    const s = qs.toString();
-    return s ? '?' + s : '';
-  });
+  let readerSuffix = $derived(contentLocaleSuffix(clang, country));
 
   let loadSeq = 0;
 
@@ -124,12 +124,9 @@
     detail = null;
     rows = [];
     try {
-      const d = await withIpcTimeout(getTitleDetail({
-        titleId: id,
-        lang: activeLang,
-        clang: activeClang,
-        countryCode: activeCountry,
-      }));
+      const d = await withIpcTimeout(getTitleDetail(
+        titleDetailRequestArgs(id, activeLang, activeClang, activeCountry),
+      ));
       if (seq !== loadSeq) return;
       detail = d;
       readSet = getReadChapters(id);
@@ -205,13 +202,9 @@
     }
     // Pass the title page's locale through so the reader requests pages
     // in the same language/country tuple. Without this the reader
-    // falls back to defaults and a Portuguese title would render in
-    // English.
-    const qs = new URLSearchParams();
-    if (clang !== DEFAULT_CLANG) qs.set('clang', clang);
-    if (country !== DEFAULT_COUNTRY) qs.set('country', country);
-    const suffix = qs.toString();
-    goto('/reader/' + chapterId + (suffix ? '?' + suffix : ''));
+    // falls back to defaults and a translated title could render in the
+    // wrong language.
+    goto(readerHref(chapterId, clang, country));
   }
 
   function onScroll(e: Event) {

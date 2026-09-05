@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import type { Title } from '$lib/types';
   import TitleCard from '$lib/TitleCard.svelte';
-  import { DEFAULT_COUNTRY, langCode } from '$lib/lang';
+  import { DEFAULT_COUNTRY, mergeTitlesByContentLanguages, titleHref } from '$lib/lang';
+  import { contentLanguages } from '$lib/contentLanguagePreference';
   import { withIpcTimeout } from '$lib/ipcTimeout';
   import { getFavorites, getSubscription } from '$lib/ipcCommands';
   import {
@@ -19,7 +20,8 @@
 
   let loading = $state(true);
   let error = $state('');
-  let titles: Title[] = $state([]);
+  let allTitles: Title[] = $state([]);
+  let titles = $derived(mergeTitlesByContentLanguages(allTitles, $contentLanguages));
 
   // Subscription plan-drop warning. Populated by the throttled
   // background check below; null = all good (or not checked yet).
@@ -67,7 +69,7 @@
     error = '';
     try {
       const view = await withIpcTimeout(getFavorites());
-      titles = view.titles ?? [];
+      allTitles = view.titles ?? [];
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -123,7 +125,7 @@
       {#each titles as title (title.titleId)}
         <TitleCard
           {title}
-          href="/title/{title.titleId}?lang={langCode(title.language)}"
+          href={titleHref(title)}
         />
       {/each}
     </div>

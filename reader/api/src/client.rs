@@ -20,10 +20,7 @@ pub const APP_VER: &str = "250";
 /// AVD running API 36 (Android 16) sends `36` and the CDN accepts it.
 pub const OS_VER_DEFAULT: &str = "36";
 
-/// Subset of MANGA Plus language codes we use. The wire format is a
-/// language string like "eng"/"esp"/"fra"/etc.; we accept &str for
-/// flexibility.
-#[allow(dead_code)]
+/// MANGA Plus language codes supported by this client.
 pub mod lang {
     pub const ENGLISH: &str = "eng";
     pub const SPANISH: &str = "esp";
@@ -34,6 +31,62 @@ pub mod lang {
     pub const THAI: &str = "tha";
     pub const VIETNAMESE: &str = "vie";
     pub const GERMAN: &str = "deu";
+
+    /// Keep outbound requests inside the supported language set.
+    /// English is the default for missing, malformed, or unsupported codes.
+    pub fn normalize(code: &str) -> &'static str {
+        for supported in [
+            ENGLISH,
+            SPANISH,
+            FRENCH,
+            INDONESIAN,
+            PORTUGUESE_BR,
+            RUSSIAN,
+            THAI,
+            VIETNAMESE,
+            GERMAN,
+        ] {
+            if code.eq_ignore_ascii_case(supported) {
+                return supported;
+            }
+        }
+        ENGLISH
+    }
+
+    /// Convert a supported content-language code to the `Title.language`
+    /// enum observed in catalog responses. Unsupported codes follow
+    /// [`normalize`] and fall back to English.
+    pub fn wire_enum(code: &str) -> i32 {
+        match normalize(code) {
+            SPANISH => 1,
+            FRENCH => 2,
+            INDONESIAN => 3,
+            PORTUGUESE_BR => 4,
+            RUSSIAN => 5,
+            THAI => 6,
+            GERMAN => 7,
+            VIETNAMESE => 9,
+            ENGLISH => 0,
+            _ => 0,
+        }
+    }
+
+    /// Convert a `Title.language` wire enum back to its supported code.
+    /// Enum 8 is intentionally unsupported until the API identifies it.
+    pub fn from_wire_enum(value: i32) -> Option<&'static str> {
+        match value {
+            0 => Some(ENGLISH),
+            1 => Some(SPANISH),
+            2 => Some(FRENCH),
+            3 => Some(INDONESIAN),
+            4 => Some(PORTUGUESE_BR),
+            5 => Some(RUSSIAN),
+            6 => Some(THAI),
+            7 => Some(GERMAN),
+            9 => Some(VIETNAMESE),
+            _ => None,
+        }
+    }
 }
 
 // ---------- defaults ----------
@@ -413,6 +466,8 @@ impl Client {
     /// the whole searchable catalog (segmented into `contents`); the caller
     /// is expected to filter by user query string locally.
     pub async fn search(&self, lang: &str, clang: &str) -> Result<proto::SearchView> {
+        let lang = lang::normalize(lang);
+        let clang = lang::normalize(clang);
         let body = self
             .get_raw("title_list/search", &[("lang", lang), ("clang", clang)])
             .await?;
@@ -437,6 +492,8 @@ impl Client {
         lang: &str,
         clang: &str,
     ) -> Result<proto::SearchView> {
+        let lang = lang::normalize(lang);
+        let clang = lang::normalize(clang);
         let body = self
             .get_raw(
                 "title_list/all_v3",
@@ -459,6 +516,8 @@ impl Client {
         clang: &str,
         country_code: &str,
     ) -> Result<proto::TitleDetailView> {
+        let lang = lang::normalize(lang);
+        let clang = lang::normalize(clang);
         let tid = title_id.to_string();
         let body = self
             .get_raw(
@@ -471,10 +530,11 @@ impl Client {
                 ],
             )
             .await?;
-        extract_variant(body, "title_detail_view", |d| match d {
+        let view = extract_variant(body, "title_detail_view", |d| match d {
             proto::success_result::Data::TitleDetailView(v) => Ok(v),
             _ => Err(()),
-        })
+        })?;
+        validate_title_detail_language(view, clang)
     }
 
     /// Fetch the account's subscription state. The desktop app polls
@@ -506,6 +566,7 @@ impl Client {
         clang: &str,
         country_code: &str,
     ) -> Result<proto::MangaViewer> {
+        let clang = lang::normalize(clang);
         let cid = chapter_id.to_string();
         let body = self
             .get_raw(
@@ -523,14 +584,54 @@ impl Client {
                 ],
             )
             .await?;
-        extract_variant(body, "manga_viewer", |d| match d {
+        let viewer = extract_variant(body, "manga_viewer", |d| match d {
             proto::success_result::Data::MangaViewer(v) => Ok(v),
             _ => Err(()),
-        })
+        })?;
+        validate_manga_viewer_language(viewer, clang)
     }
 }
 
 // ---------- shared response-parsing helpers ----------
+
+/// Reject a detail payload for a different translated edition. Chapter
+/// metadata is returned atomically with this title, so validating the title's
+/// wire enum prevents a mislabeled detail/chapter list from reaching the UI.
+fn validate_title_detail_language(
+    view: proto::TitleDetailView,
+    clang: &str,
+) -> Result<proto::TitleDetailView> {
+    let expected_code = lang::normalize(clang);
+    let expected_enum = lang::wire_enum(expected_code);
+    if let Some(title) = &view.title {
+        if title.language != expected_enum {
+            let actual = lang::from_wire_enum(title.language)
+                .unwrap_or("unknown");
+            return Err(ApiError::Other(format!(
+                "title detail language mismatch: requested {expected_code}, got {actual} (enum {})",
+                title.language
+            )));
+        }
+    }
+    Ok(view)
+}
+
+/// `manga_viewer_v3` includes the content language as a three-character
+/// string. Enforce it before exposing chapter pages or prefetching the next
+/// chapter so navigation cannot silently switch translated editions.
+fn validate_manga_viewer_language(
+    viewer: proto::MangaViewer,
+    clang: &str,
+) -> Result<proto::MangaViewer> {
+    let expected = lang::normalize(clang);
+    if !viewer.title_language.eq_ignore_ascii_case(expected) {
+        return Err(ApiError::Other(format!(
+            "manga viewer language mismatch: requested {expected}, got {}",
+            viewer.title_language
+        )));
+    }
+    Ok(viewer)
+}
 
 /// Parse a Response, extract the `success.data` oneof, and apply a
 /// caller-supplied matcher that returns Ok(T) for the expected variant.
@@ -744,6 +845,90 @@ mod tests {
             debug_info: String::new(),
         });
         assert_eq!(bare.to_string(), "API error: action=3");
+    }
+
+    #[test]
+    fn supported_languages_are_normalized_with_english_as_default() {
+        let supported = [
+            lang::ENGLISH,
+            lang::SPANISH,
+            lang::FRENCH,
+            lang::INDONESIAN,
+            lang::PORTUGUESE_BR,
+            lang::RUSSIAN,
+            lang::THAI,
+            lang::VIETNAMESE,
+            lang::GERMAN,
+        ];
+        for code in supported {
+            assert_eq!(lang::normalize(code), code);
+            assert_eq!(lang::normalize(&code.to_ascii_uppercase()), code);
+        }
+        assert_eq!(lang::normalize(""), lang::ENGLISH);
+        assert_eq!(lang::normalize("unsupported"), lang::ENGLISH);
+    }
+
+    #[test]
+    fn supported_language_wire_mapping_round_trips() {
+        for code in [
+            lang::ENGLISH,
+            lang::SPANISH,
+            lang::FRENCH,
+            lang::INDONESIAN,
+            lang::PORTUGUESE_BR,
+            lang::RUSSIAN,
+            lang::THAI,
+            lang::VIETNAMESE,
+            lang::GERMAN,
+        ] {
+            assert_eq!(lang::from_wire_enum(lang::wire_enum(code)), Some(code));
+        }
+        assert_eq!(lang::from_wire_enum(i32::MAX), None);
+    }
+
+    #[test]
+    fn title_detail_and_manga_viewer_accept_only_the_requested_language() {
+        for code in [
+            lang::ENGLISH,
+            lang::SPANISH,
+            lang::FRENCH,
+            lang::INDONESIAN,
+            lang::PORTUGUESE_BR,
+            lang::RUSSIAN,
+            lang::THAI,
+            lang::VIETNAMESE,
+            lang::GERMAN,
+        ] {
+            let detail = proto::TitleDetailView {
+                title: Some(proto::Title {
+                    language: lang::wire_enum(code),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(validate_title_detail_language(detail, code).is_ok());
+
+            let viewer = proto::MangaViewer {
+                title_language: code.to_string(),
+                ..Default::default()
+            };
+            assert!(validate_manga_viewer_language(viewer, code).is_ok());
+        }
+
+        let spanish_detail = proto::TitleDetailView {
+            title: Some(proto::Title {
+                language: lang::wire_enum(lang::SPANISH),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(validate_title_detail_language(spanish_detail, lang::PORTUGUESE_BR).is_err());
+
+        let spanish_viewer = proto::MangaViewer {
+            title_language: lang::SPANISH.to_string(),
+            ..Default::default()
+        };
+        assert!(validate_manga_viewer_language(spanish_viewer, lang::PORTUGUESE_BR).is_err());
     }
 
     #[test]

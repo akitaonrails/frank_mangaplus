@@ -205,11 +205,12 @@ mod tests {
 
     #[test]
     fn filter_to_language_keeps_only_requested_lang() {
+        let english = mangaplus_api::lang::wire_enum(mangaplus_api::lang::ENGLISH);
+        let portuguese = mangaplus_api::lang::wire_enum(mangaplus_api::lang::PORTUGUESE_BR);
         let input = vec![
-            title(1, "Bleach (eng)", 0),
-            title(2, "Bleach (esp)", 1),
-            title(3, "One Piece (eng)", 0),
-            title(4, "Naruto (por)", 3),
+            title(1, "Bleach (eng)", english),
+            title(3, "One Piece (eng)", english),
+            title(4, "Naruto (ptb)", portuguese),
         ];
         let kept = filter_to_language(input, "eng");
         let names: Vec<_> = kept.iter().map(|t| t.name.as_str()).collect();
@@ -224,10 +225,47 @@ mod tests {
 
     #[test]
     fn filter_to_language_drops_everything_for_no_match() {
-        // Spanish requested, but every title is English-tagged → empty.
-        let input = vec![title(1, "x", 0), title(2, "y", 0)];
-        let kept = filter_to_language(input, "esp");
+        // PT-BR requested, but every title is English-tagged → empty.
+        let english = mangaplus_api::lang::wire_enum(mangaplus_api::lang::ENGLISH);
+        let input = vec![title(1, "x", english), title(2, "y", english)];
+        let kept = filter_to_language(input, "ptb");
         assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn filter_to_language_uses_confirmed_wire_enums() {
+        let languages = [
+            mangaplus_api::lang::ENGLISH,
+            mangaplus_api::lang::SPANISH,
+            mangaplus_api::lang::FRENCH,
+            mangaplus_api::lang::INDONESIAN,
+            mangaplus_api::lang::PORTUGUESE_BR,
+            mangaplus_api::lang::RUSSIAN,
+            mangaplus_api::lang::THAI,
+            mangaplus_api::lang::VIETNAMESE,
+            mangaplus_api::lang::GERMAN,
+        ];
+        let input: Vec<_> = languages
+            .iter()
+            .enumerate()
+            .map(|(index, code)| {
+                title(
+                    100 + index as u32,
+                    code,
+                    mangaplus_api::lang::wire_enum(code),
+                )
+            })
+            .collect();
+
+        for (index, code) in languages.iter().enumerate() {
+            let kept = filter_to_language(input.clone(), code);
+            let ids: Vec<_> = kept.iter().map(|t| t.title_id).collect();
+            assert_eq!(
+                ids,
+                vec![100 + index as u32],
+                "wrong filter result for {code}"
+            );
+        }
     }
 
     #[test]
@@ -235,13 +273,14 @@ mod tests {
         // Same titleId appearing in both serializing and completed —
         // not impossible if the API briefly mid-relists during a status
         // change. Dedupe preserves the first occurrence.
+        let english = mangaplus_api::lang::wire_enum(mangaplus_api::lang::ENGLISH);
         let serializing = view(vec![group(vec![
-            title(100, "first", 0),
-            title(101, "second", 0),
+            title(100, "first", english),
+            title(101, "second", english),
         ])]);
         let completed = view(vec![group(vec![
-            title(100, "first (dupe)", 0),
-            title(102, "third", 0),
+            title(100, "first (dupe)", english),
+            title(102, "third", english),
         ])]);
         let merged = merge_views([serializing, completed], "eng");
         let names: Vec<_> = merged.iter().map(|t| t.name.as_str()).collect();
@@ -252,14 +291,30 @@ mod tests {
     fn merge_views_applies_language_filter() {
         // Mixed languages in a single bucket → only requested lang
         // survives.
+        let english = mangaplus_api::lang::wire_enum(mangaplus_api::lang::ENGLISH);
+        let portuguese = mangaplus_api::lang::wire_enum(mangaplus_api::lang::PORTUGUESE_BR);
         let v = view(vec![group(vec![
-            title(1, "eng-1", 0),
-            title(2, "esp-1", 1),
-            title(3, "eng-2", 0),
+            title(1, "eng-1", english),
+            title(2, "ptb-1", portuguese),
+            title(3, "eng-2", english),
         ])]);
         let merged = merge_views([v], "eng");
         assert_eq!(merged.len(), 2);
-        assert!(merged.iter().all(|t| t.language == 0));
+        assert!(merged.iter().all(|t| t.language == english));
+    }
+
+    #[test]
+    fn merge_views_selects_ptb_and_keeps_english_out() {
+        let english = mangaplus_api::lang::wire_enum(mangaplus_api::lang::ENGLISH);
+        let portuguese = mangaplus_api::lang::wire_enum(mangaplus_api::lang::PORTUGUESE_BR);
+        let v = view(vec![group(vec![
+            title(100020, "One Piece (eng)", english),
+            title(100149, "One Piece (ptb)", portuguese),
+            title(100150, "Unsupported edition", i32::MAX),
+        ])]);
+        let merged = merge_views([v], "ptb");
+        let ids: Vec<_> = merged.iter().map(|t| t.title_id).collect();
+        assert_eq!(ids, vec![100149]);
     }
 
     #[test]
@@ -275,9 +330,10 @@ mod tests {
     fn merge_views_preserves_iteration_order() {
         // Order matters for UI scroll-restore. Dedupe must keep the
         // first-seen variant, not the last.
-        let v1 = view(vec![group(vec![title(1, "alpha", 0)])]);
-        let v2 = view(vec![group(vec![title(2, "beta", 0)])]);
-        let v3 = view(vec![group(vec![title(3, "gamma", 0)])]);
+        let english = mangaplus_api::lang::wire_enum(mangaplus_api::lang::ENGLISH);
+        let v1 = view(vec![group(vec![title(1, "alpha", english)])]);
+        let v2 = view(vec![group(vec![title(2, "beta", english)])]);
+        let v3 = view(vec![group(vec![title(3, "gamma", english)])]);
         let merged = merge_views([v1, v2, v3], "eng");
         let ids: Vec<_> = merged.iter().map(|t| t.title_id).collect();
         assert_eq!(ids, vec![1, 2, 3]);
@@ -292,9 +348,12 @@ mod tests {
         assert_eq!(lang_str_to_enum("eng"), 0);
         assert_eq!(lang_str_to_enum("esp"), 1);
         assert_eq!(lang_str_to_enum("fra"), 2);
-        assert_eq!(lang_str_to_enum("por"), 3);
-        assert_eq!(lang_str_to_enum("rus"), 4);
-        assert_eq!(lang_str_to_enum("ind"), 5);
+        assert_eq!(lang_str_to_enum("ind"), 3);
+        assert_eq!(lang_str_to_enum("ptb"), 4);
+        assert_eq!(lang_str_to_enum("rus"), 5);
+        assert_eq!(lang_str_to_enum("tha"), 6);
+        assert_eq!(lang_str_to_enum("deu"), 7);
+        assert_eq!(lang_str_to_enum("vie"), 9);
     }
 
     #[test]
@@ -307,14 +366,13 @@ mod tests {
 
     #[test]
     fn lang_str_to_enum_is_case_insensitive() {
-        // Without case folding, "ESP" would have fallen through to the
-        // English default (0) — quietly serving English titles to a
-        // Spanish user. The match arms only know lowercase, so the
-        // function lowercases first.
+        // Supported language codes are normalized without requiring the
+        // caller to provide a particular case.
         assert_eq!(lang_str_to_enum("ENG"), 0);
-        assert_eq!(lang_str_to_enum("ESP"), 1);
         assert_eq!(lang_str_to_enum("Eng"), 0);
-        assert_eq!(lang_str_to_enum("Por"), 3);
+        assert_eq!(lang_str_to_enum("Ptb"), 4);
+        assert_eq!(lang_str_to_enum("DeU"), 7);
+        assert_eq!(lang_str_to_enum("VIE"), 9);
     }
 
     #[test]
@@ -571,7 +629,7 @@ fn serve_from_cache(
     // default, which bounds stack use against a deeply-nested
     // adversarial cache file. We rely on the default rather than
     // building a `Deserializer` explicitly so this stays one line.
-    let titles: Vec<proto::Title> = match serde_json::from_slice(&bytes) {
+    let cached_titles: Vec<proto::Title> = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(e) => {
             // Old/unknown shape (e.g. a v0.9.3 build wrote proto bytes
@@ -593,7 +651,23 @@ fn serve_from_cache(
     // written by builds before the filter shipped (v0.9.3) don't
     // bleed dupes into the UI. New caches are pre-filtered in
     // fetch_and_merge — belt and suspenders.
-    let titles = filter_to_language(titles, lang);
+    let cached_title_count = cached_titles.len();
+    let titles = filter_to_language(cached_titles, clang);
+    if cached_title_count > 0 && titles.is_empty() {
+        // Builds before content-language selection filtered this cache by
+        // `lang` instead of `clang`. A previously-written (eng, ptb) cache
+        // can therefore contain only English titles. Treat that shape as a
+        // migration miss instead of serving an empty selected-language
+        // catalog for up to the full TTL.
+        eprintln!(
+            "[all-titles] cache for ({lang}, {clang}) has no matching content-language titles; \
+             evicting and refetching."
+        );
+        let (bin_path, meta_path) = all_titles_cache::cache_paths(cache_dir, lang, clang);
+        let _ = std::fs::remove_file(&bin_path);
+        let _ = std::fs::remove_file(&meta_path);
+        return None;
+    }
     let source = match fresh {
         all_titles_cache::Freshness::Fresh => "fresh",
         all_titles_cache::Freshness::Stale => "stale",
@@ -632,11 +706,10 @@ struct AllTitlesPayload {
 /// single deduplicated title list. The official app shows two tabs —
 /// we paste them together because the desktop search UI is unified.
 ///
-/// Unlike `/title_list/search` (which honours the `lang` query param
-/// and returns only matching-language titles), `/title_list/all_v3`
-/// ignores `lang` and returns every language variant — Akane-banashi
-/// shows up once per dub (eng/esp/por/ind). We filter on the
-/// `Title.language` enum so the result matches what the user asked for.
+/// Unlike `/title_list/search`, `/title_list/all_v3` may return several
+/// language variants in one response. `clang` is the content/catalog
+/// language while `lang` localizes the service interface, so the local
+/// `Title.language` filter must follow `clang`.
 ///
 /// Uses `tokio::join!` (NOT `try_join!`) so a 429 on one bucket
 /// doesn't lose the other. The merge collects whatever succeeded;
@@ -671,7 +744,7 @@ async fn fetch_and_merge(
             "both /all_v3 buckets failed; cached copy (if any) still served".into(),
         ));
     }
-    Ok(merge_views(serializing.into_iter().chain(completed), lang))
+    Ok(merge_views(serializing.into_iter().chain(completed), clang))
 }
 
 /// Flatten + dedupe + filter-by-language. Extracted as a pure
@@ -679,9 +752,9 @@ async fn fetch_and_merge(
 /// without spinning up a client or fixture HTTP server.
 fn merge_views(
     views: impl IntoIterator<Item = proto::SearchView>,
-    lang: &str,
+    content_lang: &str,
 ) -> Vec<proto::Title> {
-    let want_lang = lang_str_to_enum(lang);
+    let want_lang = lang_str_to_enum(content_lang);
     let mut seen = std::collections::HashSet::<u32>::new();
     let mut merged: Vec<proto::Title> = Vec::new();
     for view in views {
@@ -708,8 +781,7 @@ fn merge_views(
 fn warn_unknown_language_once(lang: i32) {
     use std::sync::{Mutex, OnceLock};
     static SEEN_UNKNOWN: OnceLock<Mutex<std::collections::HashSet<i32>>> = OnceLock::new();
-    // Known enum range mirrors lang_str_to_enum. 0..=5 inclusive.
-    if (0..=5).contains(&lang) {
+    if mangaplus_api::lang::from_wire_enum(lang).is_some() {
         return;
     }
     let mu = SEEN_UNKNOWN.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
@@ -725,31 +797,23 @@ fn warn_unknown_language_once(lang: i32) {
     }
 }
 
-/// Map a 3-letter language tag to MANGA Plus's wire enum. The mapping
+/// Map an API content-language tag to MANGA Plus's wire enum. The mapping
 /// mirrors `reader/desktop/src/lib/lang.ts::LANG_ENUM_TO_CODE` —
 /// changing either side without the other will silently misfilter.
 /// Returned as i32 because that's how prost generates Title.language.
+/// Values were confirmed against live search, detail, and reader responses;
+/// enum 8 remains intentionally unsupported until the API identifies it.
 ///
-/// Case-folds the input so "ESP" / "Esp" / "esp" all resolve to
-/// Spanish. The earlier strict-match version treated "ESP" as unknown
-/// and silently fell through to the English fallback (enum 0) —
-/// quietly serving English titles to a Spanish user.
+/// Input is normalized case-insensitively and unsupported values fall
+/// back to English.
 fn lang_str_to_enum(lang: &str) -> i32 {
-    match lang.to_ascii_lowercase().as_str() {
-        "eng" => 0,
-        "esp" => 1,
-        "fra" => 2,
-        "por" => 3,
-        "rus" => 4,
-        "ind" => 5,
-        _ => 0, // unknown → behave like English; better than dropping everything
-    }
+    mangaplus_api::lang::wire_enum(lang)
 }
 
 /// Keep only titles in the requested language. Used at every
 /// boundary where multi-language Title lists leak in — the fresh-
 /// fetch merge and the cache read path — so the UI is never asked to
-/// render dupes across language variants.
+/// render content outside the requested catalog language.
 fn filter_to_language(titles: Vec<proto::Title>, lang: &str) -> Vec<proto::Title> {
     let want = lang_str_to_enum(lang);
     titles.into_iter().filter(|t| t.language == want).collect()

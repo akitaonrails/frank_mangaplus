@@ -311,8 +311,8 @@ mod tests {
     fn cache_paths_distinguish_locale_pairs() {
         let dir = Path::new("/tmp/x");
         let (eng, _) = cache_paths(dir, "eng", "eng");
-        let (spa, _) = cache_paths(dir, "spa", "eng");
-        assert_ne!(eng, spa);
+        let (ptb, _) = cache_paths(dir, "ptb", "eng");
+        assert_ne!(eng, ptb);
     }
 
     #[test]
@@ -372,7 +372,7 @@ mod tests {
         assert!(g.try_acquire("eng", "eng"));
         assert!(!g.try_acquire("eng", "eng"));
         // Different locale is independent.
-        assert!(g.try_acquire("spa", "eng"));
+        assert!(g.try_acquire("ptb", "eng"));
         g.release("eng", "eng");
         // After release, re-acquire works.
         assert!(g.try_acquire("eng", "eng"));
@@ -387,7 +387,7 @@ mod tests {
         g.release("eng", "eng"); // no panic, no state change
         assert!(g.try_acquire("eng", "eng"));
         // Releasing a NON-acquired key leaves the acquired one alone.
-        g.release("spa", "eng");
+        g.release("ptb", "eng");
         assert!(!g.try_acquire("eng", "eng")); // still held
     }
 
@@ -395,13 +395,13 @@ mod tests {
     fn refresh_guard_release_one_of_n_preserves_others() {
         let g = RefreshGuards::default();
         assert!(g.try_acquire("eng", "eng"));
-        assert!(g.try_acquire("spa", "eng"));
-        assert!(g.try_acquire("por", "eng"));
+        assert!(g.try_acquire("ptb", "eng"));
+        assert!(g.try_acquire("eng", "ptb"));
         // Release only the middle entry.
-        g.release("spa", "eng");
+        g.release("ptb", "eng");
         assert!(!g.try_acquire("eng", "eng")); // still held
-        assert!(!g.try_acquire("por", "eng")); // still held
-        assert!(g.try_acquire("spa", "eng"));  // newly free
+        assert!(!g.try_acquire("eng", "ptb")); // still held
+        assert!(g.try_acquire("ptb", "eng"));  // newly free
     }
 
     #[test]
