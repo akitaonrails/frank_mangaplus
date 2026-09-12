@@ -477,6 +477,21 @@ impl Client {
         })
     }
 
+    /// Fetch the account's subscription state. The desktop app polls
+    /// this to warn when the server-side plan silently drops (a lapsed
+    /// Play-receipt refresh downgrades the account to "basic" — see
+    /// SubscriptionView in the proto). Read-only; the actual restore
+    /// needs a Google-signed Play receipt only the official app has.
+    pub async fn get_subscription(&self, country_code: &str) -> Result<proto::SubscriptionView> {
+        let body = self
+            .get_raw("subscription", &[("country_code", country_code)])
+            .await?;
+        extract_variant(body, "subscription_view", |d| match d {
+            proto::success_result::Data::SubscriptionView(v) => Ok(v),
+            _ => Err(()),
+        })
+    }
+
     /// Fetch a chapter's page list.
     ///
     /// `img_quality`: "low" | "high" | "super_high". `viewer_mode`:
@@ -582,10 +597,23 @@ pub(crate) fn is_retriable(err: &ApiError) -> bool {
 }
 
 fn server_error(e: proto::ErrorResult) -> ApiError {
+    // Prefer the server's human-readable English popup ("Invalid user
+    // access(11301)", maintenance notices, region blocks, …) over the
+    // usually-empty debug_info. subject + body compose the full message;
+    // either may be blank on its own.
+    let popup = e.english_popup.and_then(|p| {
+        let text = match (p.subject.is_empty(), p.body.is_empty()) {
+            (false, false) => format!("{}: {}", p.subject, p.body),
+            (false, true) => p.subject,
+            (true, false) => p.body,
+            (true, true) => return None,
+        };
+        Some(text)
+    });
     ApiError::Server {
         code: Some(format!("action={}", e.action)),
         action: None,
-        english: if e.debug_info.is_empty() { None } else { Some(e.debug_info) },
+        english: popup.or(if e.debug_info.is_empty() { None } else { Some(e.debug_info) }),
     }
 }
 
@@ -598,6 +626,7 @@ fn variant_name(d: &proto::success_result::Data) -> &'static str {
         MangaViewer(_)          => "manga_viewer",
         ProfileSettingsView(_)  => "profile_settings_view",
         SearchView(_)           => "search_view",
+        SubscriptionView(_)     => "subscription_view",
         FavoriteTitlesView(_)   => "favorite_titles_view",
     }
 }
@@ -679,6 +708,43 @@ fn md5_hex(input: &[u8]) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn server_error_surfaces_english_popup() {
+        // Live-observed shape: a subscription-locked chapter returns
+        // english_popup { subject: "Invalid user", body: "Invalid user
+        // access(11301)" } with action=0 and empty debug_info. Before
+        // english_popup was decoded, this rendered as a bare "action=0".
+        let err = server_error(proto::ErrorResult {
+            action: 0,
+            english_popup: Some(proto::ErrorPopup {
+                subject: "Invalid user".into(),
+                body: "Invalid user access(11301)".into(),
+            }),
+            debug_info: String::new(),
+        });
+        assert_eq!(
+            err.to_string(),
+            "API error: Invalid user: Invalid user access(11301) (action=0)"
+        );
+    }
+
+    #[test]
+    fn server_error_falls_back_to_debug_info_then_code() {
+        let err = server_error(proto::ErrorResult {
+            action: 2,
+            english_popup: None,
+            debug_info: "maintenance".into(),
+        });
+        assert_eq!(err.to_string(), "API error: maintenance (action=2)");
+
+        let bare = server_error(proto::ErrorResult {
+            action: 3,
+            english_popup: None,
+            debug_info: String::new(),
+        });
+        assert_eq!(bare.to_string(), "API error: action=3");
+    }
 
     #[test]
     fn md5_hex_known_vectors() {

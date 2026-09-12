@@ -20,6 +20,7 @@
 - Rust clippy commands from `reader`: `cargo clippy -p mangaplus-api --lib --tests -- -D warnings` and `cargo clippy -p mangaplus-desktop --lib --tests -- -D warnings`.
 - `cargo fmt --check` is warn-only in CI because no committed rustfmt config exists yet.
 - Local full-ish verification from `reader`: `./verify.sh`; it also probes Vite dev CSS chunks that `bun run build` can miss.
+- Release binary from `reader/desktop`: `bun run tauri build --no-bundle` (drop the flag to also produce deb/rpm/AppImage).
 - No frontend lint script/config was found; do not invent `bun run lint`.
 
 ## Build/test prerequisites
@@ -35,6 +36,10 @@
 - Use `src/lib/img.ts` `proxied(...)` for CDN image URLs. Do not rename it to `img`; that name previously broke Svelte 5 style extraction/PostCSS in dev mode.
 - `MANGAPLUS_SECRET` overrides the on-disk secret. Without an env/config secret, startup auto-registers a free-tier device and writes local config under the platform config dir.
 - Image/cache data lives under XDG-style cache dirs such as `~/.cache/mangaplus-reader/`; local secret/render config lives under `~/.config/mangaplus-reader/` on Linux.
+- The image cache (`<cache>/title/…`) is GC'd at startup to a byte budget, oldest-mtime first (`MANGAPLUS_IMAGE_CACHE_MAX_MB`, default 2048); the catalog SWR cache at the cache root is never touched by GC.
+- Page image URLs are signed with ~1-2h `expires=`; the reader re-fetches a chapter to re-sign them (also refreshing the `plus_vw_token` cookie) on image error, on visibilitychange, and via a minutely sweep — see `isUrlExpired` in `src/lib/readerLogic.ts`.
 - The full-catalog SWR cache (`all_titles_<lang>_<clang>.bin` + `.meta.json` in the cache dir) defaults to a 24h TTL; `MANGAPLUS_CATALOG_TTL_HOURS=N` overrides it.
+- The server-side subscription plan (`basic`/`standard`/`deluxe`) can silently lapse to `basic`; MAX-tier chapters then refuse with "Invalid user access(11301)". The Library page polls `get_subscription` and warns; the restore ritual (rooted AVD + official app) is in `reader/docs/android-secret.md`. The desktop cannot restore by itself — `subscription_restore` needs a Google-signed Play receipt.
 - Linux render mode is decided before WebKit starts: `MANGAPLUS_RENDER_MODE` wins, then `~/.config/mangaplus-reader/render.conf`, then crash-recovery marker, then GPU/display auto-detect. See `docs/troubleshooting.md` before changing this path.
 - For UI/Svelte route changes, run a dev-server check or `./verify.sh`; production build alone may not catch style-chunk extraction failures.
+- Build release binaries with `bun run tauri build --no-bundle`, never bare `cargo build --release`. Only the Tauri CLI sets the env its codegen reads, so a plain cargo release build silently embeds `devUrl` (`http://localhost:1420`) instead of `frontendDist` — the binary compiles and runs, then fails to connect at launch unless `bun run dev` happens to be up. Check a suspect binary with `strings target/release/mangaplus-desktop | grep -c _app/immutable`: nonzero means the frontend is embedded, 0 means it is not.

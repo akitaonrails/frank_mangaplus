@@ -13,7 +13,7 @@
     ·
     <a href="docs/install.md">Install guide</a>
     ·
-    <a href="docs/android-secret.md">Get your secret</a>
+    Get your secret: <a href="docs/android-secret.md">Android</a> / <a href="docs/ios-secret.md">iOS</a>
     ·
     <a href="docs/troubleshooting.md">Troubleshooting</a>
     ·
@@ -75,7 +75,7 @@ Just a downloaded binary. Launch it, and the app registers itself with the offic
 If you also want subscription-locked chapters on desktop:
 
 - An active MANGA Plus subscription on a phone install.
-- Your `deviceSecret` from that install. 5 minutes if your phone is rooted (`adb shell`), about 20 if it isn't (rooted Android emulator on your desktop — walkthrough in [docs/android-secret.md](docs/android-secret.md)).
+- Your `deviceSecret` from that install. 5 minutes if your phone is rooted (`adb shell`), about 20 if it isn't (rooted Android emulator on your desktop — walkthrough in [docs/android-secret.md](docs/android-secret.md)). On iPhone you read it off the wire with mitmproxy instead — [docs/ios-secret.md](docs/ios-secret.md).
 - Paste it into the app's settings. Replaces the free-tier session with your subscriber one.
 
 ## Install
@@ -137,6 +137,7 @@ If you don't trust a random binary on the internet to do that honestly (you shou
 
 - [`docs/install.md`](docs/install.md): end-user install. Free-tier auto-register and the optional subscriber upgrade.
 - [`docs/android-secret.md`](docs/android-secret.md): the rooted-AVD walkthrough for extracting a subscriber `deviceSecret`. Doesn't touch your phone.
+- [`docs/ios-secret.md`](docs/ios-secret.md): the same secret on iOS, read off the wire with mitmproxy.
 - [`docs/troubleshooting.md`](docs/troubleshooting.md): blank screen on Linux, render-mode overrides, WebKitGTK crash workarounds, and how the auto-recovery handles all of that for you.
 - [`docs/debugging.md`](docs/debugging.md): contributor notes. mitmproxy, Frida, the real headers, what tripped me up.
 

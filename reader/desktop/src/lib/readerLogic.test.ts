@@ -4,8 +4,16 @@ import {
   scanChapterBounds,
   chapterIdAfter,
   chapterIdBefore,
+  chapterLockLabel,
   findGroupContainingPage,
   firstGroupOfChapter,
+  imgLoadingMode,
+  isUrlExpired,
+  PRELOAD_AHEAD,
+  PRELOAD_BEHIND,
+  urlExpiresAt,
+  URL_EXPIRY_MARGIN_SECS,
+  isSubscriptionLockError,
   keyToReaderAction,
   type LoadedPage,
 } from './readerLogic';
@@ -268,5 +276,97 @@ describe('keyToReaderAction', () => {
     expect(keyToReaderAction('Tab')).toBe(null);
     // Case sensitivity: only 'd'/'D' are mapped, not other casings.
     expect(keyToReaderAction('e')).toBe(null);
+  });
+});
+
+describe('imgLoadingMode', () => {
+  it('eager-loads the window around the reading position', () => {
+    expect(imgLoadingMode(20, 20)).toBe('eager'); // current page
+    expect(imgLoadingMode(20 + PRELOAD_AHEAD, 20)).toBe('eager'); // window edge ahead
+    expect(imgLoadingMode(20 - PRELOAD_BEHIND, 20)).toBe('eager'); // window edge behind
+  });
+
+  it('keeps far-away pages lazy', () => {
+    expect(imgLoadingMode(20 + PRELOAD_AHEAD + 1, 20)).toBe('lazy');
+    expect(imgLoadingMode(20 - PRELOAD_BEHIND - 1, 20)).toBe('lazy');
+    expect(imgLoadingMode(60, 0)).toBe('lazy');
+  });
+
+  it('covers the start of a freshly opened chapter', () => {
+    // On mount currentPageIndex is 0 — the first pages must all be
+    // eager so the reader never opens onto a placeholder.
+    for (let i = 0; i <= PRELOAD_AHEAD; i++) {
+      expect(imgLoadingMode(i, 0)).toBe('eager');
+    }
+  });
+});
+
+describe('signed-URL expiry', () => {
+  // Real shape from the live CDN.
+  const URL =
+    'https://jumpg-assets3.tokyo-cdn.com/secure/title/100004/chapter/1000193/manga_page/super_high/1.webp?hash=UoqyznSTlmS2gPm6M6AAIQ&expires=1788559200';
+
+  it('extracts the expires param', () => {
+    expect(urlExpiresAt(URL)).toBe(1788559200);
+    // Works regardless of param order.
+    expect(urlExpiresAt('https://x/y.webp?expires=42&hash=abc')).toBe(42);
+  });
+
+  it('returns null when there is no expires param', () => {
+    expect(urlExpiresAt('https://x/y.webp?hash=abc')).toBe(null);
+    expect(urlExpiresAt('https://x/y.webp')).toBe(null);
+    // "expires" as a path fragment must not match.
+    expect(urlExpiresAt('https://x/expires=9/y.webp')).toBe(null);
+  });
+
+  it('flags URLs past their expiry', () => {
+    expect(isUrlExpired(URL, 1788559200 + 1)).toBe(true);
+    expect(isUrlExpired(URL, 1788559200)).toBe(true);
+  });
+
+  it('flags URLs inside the refresh margin as expired', () => {
+    // Refresh shortly BEFORE the deadline so an in-flight request
+    // can't get refused at the edge.
+    expect(isUrlExpired(URL, 1788559200 - URL_EXPIRY_MARGIN_SECS)).toBe(true);
+    expect(isUrlExpired(URL, 1788559200 - URL_EXPIRY_MARGIN_SECS - 1)).toBe(false);
+  });
+
+  it('never expires URLs without an expires param', () => {
+    expect(isUrlExpired('https://x/y.webp?hash=abc', Number.MAX_SAFE_INTEGER)).toBe(false);
+  });
+});
+
+describe('chapterLockLabel', () => {
+  it('labels the paid ChapterType values', () => {
+    expect(chapterLockLabel(2)).toBe('MAX');         // STANDARD
+    expect(chapterLockLabel(3)).toBe('MAX Deluxe');  // DELUXE
+    expect(chapterLockLabel(4)).toBe('Locked');      // LOCKED_AFTER_FREE_READ
+  });
+
+  it('returns null for freely readable chapters', () => {
+    expect(chapterLockLabel(0)).toBe(null);  // FREE
+    expect(chapterLockLabel(1)).toBe(null);  // FREE_FOR_FIRST_TIME
+    // Absent field (older cached payloads without chapterType).
+    expect(chapterLockLabel(undefined)).toBe(null);
+    // Unknown future enum values shouldn't fabricate a lock.
+    expect(chapterLockLabel(99)).toBe(null);
+  });
+});
+
+describe('isSubscriptionLockError', () => {
+  it('matches the live-observed 11301 refusal in any wrapping', () => {
+    // Exactly as the reader receives it after the ApiError Display pass.
+    expect(isSubscriptionLockError(
+      'API error: Invalid user: Invalid user access(11301) (action=0)'
+    )).toBe(true);
+    expect(isSubscriptionLockError('invalid user access(11301)')).toBe(true);
+  });
+
+  it('does not match other errors', () => {
+    expect(isSubscriptionLockError('Timed out after 12000ms')).toBe(false);
+    expect(isSubscriptionLockError('API error: maintenance (action=2)')).toBe(false);
+    expect(isSubscriptionLockError('')).toBe(false);
+    // A different numeric code must not be treated as the paywall.
+    expect(isSubscriptionLockError('Invalid user access(11302)')).toBe(false);
   });
 });

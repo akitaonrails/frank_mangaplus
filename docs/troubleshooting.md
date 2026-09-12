@@ -112,7 +112,7 @@ The marker is just a file. If you ever want to force the next launch into `safe`
 
 ## "I can read free chapters but my subscription content is locked"
 
-The auto-registered free-tier secret only has access to free content. See [`docs/install.md`](install.md) for the subscriber path: extract your phone's `deviceSecret` and paste it into the in-app dialog. Detailed walkthrough in [`docs/android-secret.md`](android-secret.md).
+The auto-registered free-tier secret only has access to free content. See [`docs/install.md`](install.md) for the subscriber path: extract your phone's `deviceSecret` and paste it into the in-app dialog. Detailed walkthrough in [`docs/android-secret.md`](android-secret.md), or [`docs/ios-secret.md`](ios-secret.md) if your subscription lives on an iPhone.
 
 ---
 

@@ -18,6 +18,7 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/mangaplus.rs"));
 }
 
+pub mod cache_gc;
 mod client;
 mod error;
 

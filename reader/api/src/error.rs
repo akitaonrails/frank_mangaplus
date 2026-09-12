@@ -16,7 +16,7 @@ pub enum ApiError {
     #[error("server response had neither success nor error payload")]
     EmptyResponse,
 
-    #[error("API error: code={code:?} action={action:?} english={english:?}")]
+    #[error("API error: {}", server_error_text(code, english))]
     Server {
         code: Option<String>,
         action: Option<String>,
@@ -31,4 +31,17 @@ pub enum ApiError {
 
     #[error("{0}")]
     Other(String),
+}
+
+/// Human-first rendering of a server ErrorResult: lead with the English
+/// popup text when the server sent one, keep the action code as a
+/// parenthesized suffix for bug reports. Falls back to the bare code so
+/// a popup-less error still says *something*.
+fn server_error_text(code: &Option<String>, english: &Option<String>) -> String {
+    match (english, code) {
+        (Some(msg), Some(c)) => format!("{msg} ({c})"),
+        (Some(msg), None) => msg.clone(),
+        (None, Some(c)) => c.clone(),
+        (None, None) => "unknown server error".to_string(),
+    }
 }

@@ -210,3 +210,84 @@ const KEY_MAP: Record<string, ReaderAction> = {
 export function keyToReaderAction(key: string): ReaderAction | null {
   return KEY_MAP[key] ?? null;
 }
+
+// ---------- image preloading ----------
+
+// Sliding eager-load window around the reading position. Browser-native
+// lazy loading only starts a fetch when the image is nearly on screen —
+// with full-viewport page frames and flip/jump navigation that meant
+// the reader routinely landed on a placeholder and had to wait. Pages
+// inside the window get loading="eager" so they fetch immediately;
+// far-away pages stay lazy so opening a chapter doesn't pull the whole
+// title's worth of super_high images at once. Flipping an <img> from
+// lazy to eager mid-life triggers its load per the HTML spec, so the
+// window follows the reader as currentPageIndex advances.
+export const PRELOAD_AHEAD = 10;
+export const PRELOAD_BEHIND = 3;
+
+export function imgLoadingMode(
+  pageIndex: number,
+  currentPageIndex: number,
+): 'eager' | 'lazy' {
+  return pageIndex >= currentPageIndex - PRELOAD_BEHIND &&
+    pageIndex <= currentPageIndex + PRELOAD_AHEAD
+    ? 'eager'
+    : 'lazy';
+}
+
+// ---------- signed-URL expiry ----------
+
+// Page image URLs are signed: `...webp?hash=...&expires=<unix seconds>`,
+// valid for roughly 1-2 hours after the manga_viewer_v3 call that
+// minted them. A reader left open (or a machine that slept) comes back
+// with URLs the CDN now refuses — and the plus_vw_token cookie premium
+// fetches need has gone equally stale. Retrying such a URL can never
+// succeed; the chapter has to be re-fetched to mint fresh signatures
+// (which also refreshes the cookie). These helpers let the reader tell
+// a transient blip (retry the same URL) from an expired signature
+// (refresh the chapter).
+
+export function urlExpiresAt(url: string): number | null {
+  const m = /[?&]expires=(\d+)/.exec(url);
+  if (!m) return null;
+  const n = Number.parseInt(m[1], 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// Refresh slightly before the deadline so an image that starts loading
+// near the edge doesn't get its request refused mid-flight.
+export const URL_EXPIRY_MARGIN_SECS = 300;
+
+/** True when the URL's signature is past (or within the margin of) its
+ *  expiry. URLs without an expires param never count as expired. */
+export function isUrlExpired(url: string, nowSecs: number): boolean {
+  const exp = urlExpiresAt(url);
+  return exp != null && nowSecs >= exp - URL_EXPIRY_MARGIN_SECS;
+}
+
+// ---------- subscription-locked chapters ----------
+
+/** Chapter.chapterType → the label of the paywall badge, or null for
+ *  freely readable chapters. Enum values from ChapterOuterClass.java
+ *  (v2.3.0): 0 FREE, 1 FREE_FOR_FIRST_TIME, 2 STANDARD, 3 DELUXE,
+ *  4 LOCKED_AFTER_FREE_READ. The badge names the MANGA Plus MAX tier
+ *  that unlocks the chapter — whether the *user's* plan covers it is
+ *  only known server-side, so this is informational, not a hard gate. */
+export function chapterLockLabel(chapterType: number | undefined): string | null {
+  switch (chapterType) {
+    case 2: return 'MAX';
+    case 3: return 'MAX Deluxe';
+    case 4: return 'Locked';
+    default: return null;
+  }
+}
+
+/** True when an API error message is the server refusing a
+ *  subscription-locked chapter to an account whose plan doesn't cover
+ *  it. Live-observed as english_popup "Invalid user: Invalid user
+ *  access(11301)" (e.g. free/basic plan opening a DELUXE Bleach
+ *  chapter). The reader shows a friendly paywall explanation for this
+ *  instead of the raw error + useless Retry. */
+export function isSubscriptionLockError(message: string): boolean {
+  return /invalid user access\(11301\)/i.test(message);
+}

@@ -19,6 +19,7 @@
     visibleRange,
     type ChapterRow,
   } from '$lib/chapterListLogic';
+  import { chapterLockLabel } from '$lib/readerLogic';
   import { proxied } from '$lib/img';
   import { DEFAULT_LANG, DEFAULT_CLANG, DEFAULT_COUNTRY } from '$lib/lang';
   import { withIpcTimeout } from '$lib/ipcTimeout';
@@ -385,6 +386,7 @@
                     <div class="chapter-divider">{row.label}</div>
                   {:else}
                     {@const ch = row.chapter}
+                    {@const lock = chapterLockLabel(ch.chapterType)}
                     <a
                       class="chapter-row"
                       class:is-read={row.read}
@@ -397,6 +399,12 @@
                         <span class="chapter-name">{ch.name}</span>
                         {#if row.compact && ch.subTitle}
                           <span class="chapter-subtitle inline">{ch.subTitle}</span>
+                        {/if}
+                        {#if lock}
+                          <span
+                            class="badge badge-locked"
+                            title="Subscription-locked: requires the MANGA Plus {lock === 'Locked' ? '' : lock + ' '}tier"
+                          >🔒 {lock}</span>
                         {/if}
                         {#if ch.isUpdated && !row.read}
                           <span class="badge badge-new">New</span>
@@ -730,6 +738,14 @@
   .badge-last {
     background: var(--accent);
     color: #fff;
+  }
+
+  .badge-locked {
+    /* Warm amber, same family as the eye-filter "on" tint — reads as
+       "caution/paywall" without screaming error-red. */
+    background: rgba(246, 193, 119, 0.14);
+    color: #f6c177;
+    border: 1px solid rgba(246, 193, 119, 0.45);
   }
 
   @media (max-width: 640px) {

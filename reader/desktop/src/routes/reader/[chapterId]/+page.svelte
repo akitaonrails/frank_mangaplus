@@ -29,6 +29,9 @@
     chapterIdBefore,
     findGroupContainingPage,
     firstGroupOfChapter,
+    imgLoadingMode,
+    isSubscriptionLockError,
+    isUrlExpired,
     keyToReaderAction,
     type LoadedPage,
     type PageGroup,
@@ -108,6 +111,10 @@
   //                          before re-fetching.
   let prefetchingChapterIds: Set<number> = $state(new Set());
   let failedChapterIds: Set<number> = $state(new Set());
+  // Last error message per failed chapter id, so the footer block can
+  // distinguish "subscription-locked" (no point retrying) from
+  // transient network failures (retry offered).
+  let failedChapterErrors: Map<number, string> = $state(new Map());
   // Derived for the existing "loading next chapter…" indicator.
   let fetchingNext = $derived(prefetchingChapterIds.size > 0);
 
@@ -210,6 +217,14 @@
   }
 
   function onImageError(url: string) {
+    // Expired signature: retrying the same URL is guaranteed to fail
+    // (the CDN refuses it and the plus_vw_token cookie is equally
+    // stale). Skip the retry ladder and re-fetch the chapter to mint
+    // fresh URLs — the {#each} key on imageUrl remounts the <img>s.
+    if (isUrlExpired(url, Math.floor(Date.now() / 1000))) {
+      void refreshChapterUrlsForImage(url);
+      return;
+    }
     const attempts = imageAttempts.get(url) ?? 0;
     if (attempts >= MAX_AUTO_RETRIES) {
       // Auto-retry budget exhausted. Show the manual hatch.
@@ -245,6 +260,13 @@
   }
 
   function retryImage(url: string) {
+    // Manual retry of an expired URL must mint fresh signatures, not
+    // re-request the dead one — this was the "reload button loads a
+    // broken placeholder" failure after long idle/sleep.
+    if (isUrlExpired(url, Math.floor(Date.now() / 1000))) {
+      void refreshChapterUrlsForImage(url);
+      return;
+    }
     // Manual retry beyond the auto-budget — bump attempts and clear
     // failure so the overlay disappears while the new fetch is in
     // flight. If THIS attempt fails too, onImageError sees attempts
@@ -261,16 +283,113 @@
 
   function reloadAllImages() {
     if (failedImageUrls.size === 0) return;
+    const nowSecs = Math.floor(Date.now() / 1000);
     const next = new Map(imageAttempts);
     for (const url of failedImageUrls) {
       const timer = imageRetryTimers.get(url);
       if (timer) clearTimeout(timer);
       imageRetryTimers.delete(url);
-      next.set(url, (next.get(url) ?? 0) + 1);
+      if (isUrlExpired(url, nowSecs)) {
+        // Dead signature — bumping the attempt counter would just
+        // re-request a URL the CDN refuses. Refresh its chapter.
+        void refreshChapterUrlsForImage(url);
+      } else {
+        next.set(url, (next.get(url) ?? 0) + 1);
+      }
     }
     imageAttempts = next;
     failedImageUrls = new Set();
   }
+
+  // ---------- signed-URL refresh (expiry recovery) ----------
+
+  // Chapters whose URL-refresh is currently in flight. Not $state —
+  // nothing renders from it; it only guards duplicate refreshes.
+  const refreshingChapterIds = new Set<number>();
+
+  /** Re-fetch one already-loaded chapter and swap its pages' freshly
+   *  signed URLs into loadedPages in place (positional match — page
+   *  order within a chapter is stable). Also refreshes the
+   *  plus_vw_token cookie as a side effect of the manga_viewer_v3
+   *  call. The {#each} blocks key images by URL, so swapped pages
+   *  remount their <img> elements and load cleanly. */
+  async function refreshChapterUrls(chapterId: number) {
+    if (refreshingChapterIds.has(chapterId)) return;
+    if (!loadedChapterIds.has(chapterId)) return;
+    refreshingChapterIds.add(chapterId);
+    try {
+      const result = await fetchChapter(chapterId);
+      if (!result.ok) {
+        console.warn(`[reader] URL refresh for chapter ${chapterId} failed: ${result.error}`);
+        return;
+      }
+      const freshPages = (result.viewer.pages ?? [])
+        .map(p => p.data?.mangaPage)
+        .filter((mp): mp is MangaPage => !!mp);
+      let i = 0;
+      const staleUrls: string[] = [];
+      loadedPages = loadedPages.map(lp => {
+        if (lp.chapterId !== chapterId) return lp;
+        const fresh = freshPages[i++];
+        if (!fresh || fresh.imageUrl === lp.mp.imageUrl) return lp;
+        staleUrls.push(lp.mp.imageUrl);
+        return { ...lp, mp: fresh };
+      });
+      // Drop retry bookkeeping for the replaced URLs — they can never
+      // be requested again, and the sets would otherwise grow with
+      // every refresh cycle over a long session.
+      if (staleUrls.length > 0) {
+        const attempts = new Map(imageAttempts);
+        const failed = new Set(failedImageUrls);
+        for (const url of staleUrls) {
+          const timer = imageRetryTimers.get(url);
+          if (timer) clearTimeout(timer);
+          imageRetryTimers.delete(url);
+          attempts.delete(url);
+          failed.delete(url);
+        }
+        imageAttempts = attempts;
+        failedImageUrls = failed;
+      }
+    } finally {
+      refreshingChapterIds.delete(chapterId);
+    }
+  }
+
+  /** Refresh the chapter that owns the given (stale) image URL. */
+  async function refreshChapterUrlsForImage(url: string) {
+    const owner = loadedPages.find(lp => lp.mp.imageUrl === url);
+    if (owner) await refreshChapterUrls(owner.chapterId);
+  }
+
+  /** Sweep every loaded chapter and re-sign the ones whose URLs are
+   *  expired (or inside the refresh margin). Cheap — integer compares
+   *  over loadedPages — so it's safe to run often. */
+  function refreshExpiredChapterUrls() {
+    const nowSecs = Math.floor(Date.now() / 1000);
+    const expiredChapters = new Set<number>();
+    for (const lp of loadedPages) {
+      if (!expiredChapters.has(lp.chapterId) && isUrlExpired(lp.mp.imageUrl, nowSecs)) {
+        expiredChapters.add(lp.chapterId);
+      }
+    }
+    for (const id of expiredChapters) void refreshChapterUrls(id);
+  }
+
+  /** Wake/foreground recovery: when the window becomes visible again
+   *  (returning from sleep, or refocusing after hours), proactively
+   *  re-sign expired chapters so pages re-render before the user ever
+   *  sees a broken placeholder. */
+  function onVisibilityChange() {
+    if (document.visibilityState === 'visible') refreshExpiredChapterUrls();
+  }
+
+  // Periodic backstop: visibilitychange doesn't fire when the machine
+  // sleeps with the window visible, and a slow read of a long chapter
+  // can outlive the ~1-2h signatures without any visibility event at
+  // all. A minutely sweep plus the URL_EXPIRY_MARGIN_SECS margin means
+  // chapters re-sign shortly before their URLs die, in every scenario.
+  const URL_SWEEP_INTERVAL_MS = 60_000;
 
   // String-keyed Set helpers — the existing setWith / setWithout are
   // typed for number (chapter ids); these mirror them for string URLs.
@@ -388,12 +507,16 @@
     eyeFilter = getEyeFilter();
     window.addEventListener('keydown', onKey);
     window.addEventListener('mousemove', onBarMouseMove);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    const urlSweepTimer = setInterval(refreshExpiredChapterUrls, URL_SWEEP_INTERVAL_MS);
     // Bars start visible so the user can orient, then collapse.
     scheduleBarHide('top');
     scheduleBarHide('bottom');
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousemove', onBarMouseMove);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      clearInterval(urlSweepTimer);
       observer?.disconnect();
     };
   });
@@ -436,6 +559,7 @@
     titleDetailLoaded = false;
     prefetchingChapterIds = new Set();
     failedChapterIds = new Set();
+    failedChapterErrors = new Map();
     clearImageRetryTimers();
     imageAttempts = new Map();
     failedImageUrls = new Set();
@@ -601,7 +725,12 @@
     prefetchingChapterIds = setWith(prefetchingChapterIds, nextId);
     // On forced retry, clear any prior failure so the same chapter can
     // be revisited if it fails again.
-    if (force) failedChapterIds = setWithout(failedChapterIds, nextId);
+    if (force) {
+      failedChapterIds = setWithout(failedChapterIds, nextId);
+      const cleared = new Map(failedChapterErrors);
+      cleared.delete(nextId);
+      failedChapterErrors = cleared;
+    }
 
     const result = await fetchChapter(nextId);
 
@@ -613,6 +742,7 @@
       // (Load next / Retry button) clears the flag via force=true.
       console.warn(`[reader] next chapter ${nextId} failed: ${result.error}`);
       failedChapterIds = setWith(failedChapterIds, nextId);
+      failedChapterErrors = new Map(failedChapterErrors).set(nextId, result.error);
     }
   }
 
@@ -626,7 +756,13 @@
     const nextId = chapterIdAfter(allChapters, lastChId);
     if (nextId == null) return null;
     const name = allChapters.find(c => c.chapterId === nextId)?.name ?? '';
-    return { id: nextId, name, failed: failedChapterIds.has(nextId) };
+    const failed = failedChapterIds.has(nextId);
+    return {
+      id: nextId,
+      name,
+      failed,
+      locked: failed && isSubscriptionLockError(failedChapterErrors.get(nextId) ?? ''),
+    };
   });
 
   // Mark chapters as read as the user scrolls through them.
@@ -1002,8 +1138,23 @@
       <div class="spinner"></div>
     {:else if error}
       <div class="empty-state">
-        <p>{error}</p>
-        <p><button class="retry-btn" onclick={() => void loadInitial()}>↻ Retry</button></p>
+        {#if isSubscriptionLockError(error)}
+          <!-- Server refused the chapter for this account's plan.
+               Retrying can't help, so offer the way out instead. -->
+          <div class="locked-glyph" aria-hidden="true">🔒</div>
+          <p><strong>This chapter is subscription-locked.</strong></p>
+          <p class="locked-hint">
+            MANGA Plus marks it as a MAX-tier chapter and your current
+            plan doesn't include it, so the server refused the request.
+            Reading it needs the matching MANGA Plus MAX subscription on
+            the account your device secret belongs to.
+          </p>
+          <p class="locked-raw">{error}</p>
+          <p><button class="retry-btn" onclick={goBack}>← Back to title</button></p>
+        {:else}
+          <p>{error}</p>
+          <p><button class="retry-btn" onclick={() => void loadInitial()}>↻ Retry</button></p>
+        {/if}
       </div>
     {:else if loadedPages.length === 0}
       <div class="empty-state"><p>No pages found for this chapter.</p></div>
@@ -1048,7 +1199,7 @@
                   alt="Page {group.firstPageIndex + pi + 1}"
                   width={lp.mp.width || 836}
                   height={lp.mp.height || 1200}
-                  loading={group.firstPageIndex + pi < 3 ? 'eager' : 'lazy'}
+                  loading={imgLoadingMode(group.firstPageIndex + pi, currentPageIndex)}
                   decoding="async"
                   class="manga-page"
                   class:failed={failedImageUrls.has(lp.mp.imageUrl)}
@@ -1107,6 +1258,17 @@
           <div class="loading-next">
             <div class="spinner"></div>
             <span>checking for more chapters…</span>
+          </div>
+        {:else if nextChapterInfo?.locked}
+          <!-- The next chapter is subscription-locked for this account's
+               plan — retrying is futile, so say why and stop cleanly. -->
+          <div class="prefetch-error prefetch-locked">
+            <p>🔒 <strong>{nextChapterInfo.name || 'The next chapter'}</strong> is subscription-locked.</p>
+            <p class="hint">
+              It's a MANGA Plus MAX-tier chapter and your current plan
+              doesn't include it, so the server refused the request.
+            </p>
+            <button class="retry-btn" onclick={goBack}>← Back to title</button>
           </div>
         {:else if nextChapterInfo?.failed}
           <!-- Previous prefetch failed (timeout, network, server error).
@@ -1574,6 +1736,33 @@
   .prefetch-error .hint {
     color: var(--text-muted);
     font-size: 0.85rem;
+  }
+
+  /* Subscription-locked variants: amber instead of error-red — the
+     server is working fine, the account's plan just doesn't cover the
+     chapter. */
+  .prefetch-error.prefetch-locked {
+    background: rgba(246, 193, 119, 0.08);
+    border-color: rgba(246, 193, 119, 0.4);
+  }
+
+  .locked-glyph {
+    font-size: 2.4rem;
+    line-height: 1;
+  }
+
+  .locked-hint {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    max-width: 440px;
+  }
+
+  .locked-raw {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    opacity: 0.7;
+    font-family: monospace;
   }
 
   .retry-btn {
