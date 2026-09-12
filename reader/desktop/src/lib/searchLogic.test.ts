@@ -6,9 +6,16 @@ import {
   computeButtonLabel,
   buttonDisabled,
   clearFavoriteErrorState,
+  mergePendingCatalogSnapshots,
   DEFAULT_VISIBLE_CAP,
 } from './searchLogic';
 import type { SearchView, Title } from './types';
+import {
+  contentLanguageWireEnum,
+  ENGLISH,
+  PORTUGUESE_BR,
+  type ContentLanguage,
+} from './lang';
 
 function title(id: number, name = `t${id}`, author = ''): Title {
   return {
@@ -16,7 +23,7 @@ function title(id: number, name = `t${id}`, author = ''): Title {
     name,
     author,
     portraitImageUrl: '',
-    language: 0,
+    language: contentLanguageWireEnum(ENGLISH),
   };
 }
 
@@ -54,6 +61,44 @@ describe('flattenSearchView', () => {
   it('tolerates missing titleList', () => {
     const v: SearchView = { contents: [{}, { titleList: { featuredTitles: [title(7)] } }] } as SearchView;
     expect(flattenSearchView(v).map(t => t.titleId)).toEqual([7]);
+  });
+});
+
+describe('mergePendingCatalogSnapshots', () => {
+  it('preserves a fresh SWR event over stale snapshots from the pending request', () => {
+    const staleEnglish = title(1, 'stale English');
+    const freshEnglish = title(2, 'fresh English');
+    const stalePortuguese = {
+      ...title(3, 'Portuguese'),
+      language: contentLanguageWireEnum(PORTUGUESE_BR),
+    };
+    const current = new Map<ContentLanguage, Title[]>([['eng', [freshEnglish]]]);
+
+    const merged = mergePendingCatalogSnapshots(current, [
+      ['eng', [staleEnglish]],
+      ['ptb', [stalePortuguese]],
+    ]);
+
+    expect(merged.get('eng')).toEqual([freshEnglish]);
+    expect(merged.get('ptb')).toEqual([stalePortuguese]);
+  });
+
+  it('uses every pending snapshot when no refresh event arrived', () => {
+    const english = title(1, 'English');
+    const portuguese = {
+      ...title(2, 'Portuguese'),
+      language: contentLanguageWireEnum(PORTUGUESE_BR),
+    };
+
+    const merged = mergePendingCatalogSnapshots(new Map(), [
+      ['eng', [english]],
+      ['ptb', [portuguese]],
+    ]);
+
+    expect([...merged.entries()]).toEqual([
+      ['eng', [english]],
+      ['ptb', [portuguese]],
+    ]);
   });
 });
 

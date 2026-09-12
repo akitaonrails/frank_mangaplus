@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Title } from '$lib/types';
   import { proxied } from '$lib/img';
+  import { languageBadge } from '$lib/lang';
   import type { Snippet } from 'svelte';
 
   let {
@@ -14,6 +15,7 @@
   } = $props();
 
   let linkHref = $derived(href ?? `/title/${title.titleId}`);
+  let badge = $derived(languageBadge(title.language));
 </script>
 
 <!--
@@ -25,7 +27,12 @@
 -->
 <div class="title-card-wrapper">
   <a class="title-card" href={linkHref}>
-    <img src={proxied(title.portraitImageUrl)} alt={title.name} loading="lazy" />
+    <div class="cover-wrap">
+      <img src={proxied(title.portraitImageUrl)} alt={title.name} loading="lazy" />
+      {#if badge}
+        <span class="content-language-badge">{badge}</span>
+      {/if}
+    </div>
     <div class="card-info">
       <div class="card-name">{title.name}</div>
       <div class="card-author">{title.author}</div>
@@ -40,6 +47,27 @@
   .title-card-wrapper {
     display: flex;
     flex-direction: column;
+  }
+
+  .cover-wrap {
+    position: relative;
+  }
+
+  .content-language-badge {
+    position: absolute;
+    right: 7px;
+    bottom: 7px;
+    padding: 3px 7px;
+    border: 1px solid rgba(255, 255, 255, 0.65);
+    border-radius: 4px;
+    background: rgba(16, 16, 16, 0.88);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.7);
+    color: #fff;
+    font-size: 0.65rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    pointer-events: none;
   }
 
   .card-action {
