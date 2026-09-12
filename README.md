@@ -112,7 +112,7 @@ On first launch the app calls the official `/register` endpoint and is issued a 
 
 A library view of your bookmarked titles. The search page loads the catalogs for whichever content languages you selected in the header and filters locally as you type.
 
-Title detail shows the banner art, the synopsis, and the full chapter list. The list is virtualized, so a series with a thousand chapters scrolls fine. There's a sort toggle, and a "Continue ▶" button that jumps to the last chapter you opened.
+Title detail shows the banner art, the synopsis, and the full chapter list. The list is virtualized, so a series with a thousand chapters scrolls fine. Read chapters are hidden by default so what's left to read is what you see — a toggle next to the sort button cycles unread-only → read-collapsed → all chapters, and the choice sticks. There's also a "Continue ▶" button that jumps to the last chapter you opened.
 
 The reader is page-fit and snap-scrolls. Click the left half of a page to advance, the right half to go back (manga RTL reading direction). Arrow keys, Space, j/k, PageUp/Down all work too. When you reach the end of a chapter the next one pre-fetches and appends to the scroll, so you don't have to bounce back to the chapter list every time. Per-chapter resume is automatic — leave mid-read and the next time you open that chapter you land on the page you stopped at.
 
