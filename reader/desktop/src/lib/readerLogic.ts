@@ -265,6 +265,37 @@ export function isUrlExpired(url: string, nowSecs: number): boolean {
   return exp != null && nowSecs >= exp - URL_EXPIRY_MARGIN_SECS;
 }
 
+// ---------- retry cache-busting ----------
+
+/** Query parameter used to bust a failed image load. Stripped by the
+ *  `mpimg://` scheme handler in `src-tauri/src/lib.rs` before the URL is
+ *  forwarded to the CDN, so the signed query the CDN checks is
+ *  unchanged. Keep the two in sync. */
+export const RETRY_PARAM = 'mpretry';
+
+/**
+ * Build the `<img src>` for a page, given how many reload attempts it
+ * has taken. Attempt 0 is the untouched proxied URL.
+ *
+ * This MUST be a query parameter, not a fragment. Per the HTML spec, an
+ * <img> whose src changes only in the fragment is not re-fetched (the
+ * fragment is excluded from the resource identity), and a fragment never
+ * reaches the URL loader, so the Rust scheme handler cannot see it
+ * either — a fragment-only change resolves to the same already-failed
+ * resource and the load short-circuits. A query parameter changes the
+ * identity the loader and cache actually key on.
+ *
+ * A changed src alone is still not enough to recover a broken `<img>`:
+ * WebKit also records the failed load on the element itself. The reader
+ * keys its `{#each}` on the attempt count so the element is recreated —
+ * which is what leaving the chapter and coming back does.
+ */
+export function retryImageSrc(base: string, attempt: number): string {
+  if (!base || attempt <= 0) return base;
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}${RETRY_PARAM}=${attempt}`;
+}
+
 // ---------- subscription-locked chapters ----------
 
 /** Chapter.chapterType → the label of the paywall badge, or null for

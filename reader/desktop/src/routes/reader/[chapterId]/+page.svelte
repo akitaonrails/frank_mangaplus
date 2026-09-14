@@ -33,6 +33,7 @@
     isSubscriptionLockError,
     isUrlExpired,
     keyToReaderAction,
+    retryImageSrc,
     type LoadedPage,
     type PageGroup,
   } from '$lib/readerLogic';
@@ -212,12 +213,17 @@
   const imageRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   function imageSrc(url: string): string {
-    const base = proxied(url);
-    const n = imageAttempts.get(url) ?? 0;
-    // Fragments don't reach the server — the mpimg custom protocol
-    // handler in lib.rs strips them — but they change what the browser
-    // sees as the src, forcing a fresh request.
-    return n > 0 ? `${base}#attempt=${n}` : base;
+    return retryImageSrc(proxied(url), imageAttempts.get(url) ?? 0);
+  }
+
+  // Retry identity for the {#each} key. Bumping the attempt count
+  // changes the key, so Svelte destroys and recreates the <img> rather
+  // than patching its src. That matters: WebKit records a failed load
+  // against the element itself, so a patched src on a broken <img> can
+  // be ignored. Recreating the element is what leaving the chapter and
+  // re-entering does — the one recovery path known to work.
+  function imageKey(url: string): string {
+    return `${url}|${imageAttempts.get(url) ?? 0}`;
   }
 
   function onImageError(url: string) {
@@ -409,6 +415,26 @@
   // Pages bundled into render frames. See lib/readerLogic.ts for the
   // pure grouping logic + its unit tests.
   let pageGroups: PageGroup[] = $derived(buildPageGroups(loadedPages, pageMode));
+
+  // Absolute index in loadedPages -> 1-based page number within its own
+  // chapter. The reload overlay has to agree with the progress bar,
+  // which counts per chapter (pageInChapter); labelling the overlay with
+  // the absolute index made it announce "Reload page 63" while the bar
+  // read "Page 18 of 45" as soon as the reader had scrolled past a
+  // chapter boundary. Built in one pass rather than calling
+  // scanChapterBounds per rendered group, which would be quadratic.
+  let pageNumberInChapter: number[] = $derived.by(() => {
+    const out = new Array<number>(loadedPages.length);
+    let n = 0;
+    let prev: number | null = null;
+    for (let i = 0; i < loadedPages.length; i++) {
+      const cid = loadedPages[i].chapterId;
+      n = cid === prev ? n + 1 : 1;
+      prev = cid;
+      out[i] = n;
+    }
+    return out;
+  });
 
   // Currently-visible group (0-indexed into pageGroups).
   let currentGroup = $state(0);
@@ -1181,13 +1207,15 @@
             data-group-index={gi}
             bind:this={frameEls[gi]}
           >
-            {#each group.pages as lp, pi (lp.mp.imageUrl)}
+            {#each group.pages as lp, pi (imageKey(lp.mp.imageUrl))}
               <!--
                 width + height attrs reserve the correct aspect-ratio'd
                 space before bytes arrive (prevents Cumulative Layout
                 Shift). onerror/onload track per-image fetch outcome so
                 we can surface a retry overlay; the imageSrc helper
-                appends a fragment when retrying so the browser refetches.
+                appends a cache-busting query param when retrying (see
+                readerLogic.retryImageSrc) and the each-key above forces
+                a fresh element so the refetch actually happens.
                 Fallback to typical MANGA Plus page dimensions (836x1200)
                 when the proto returned zeroes — otherwise the wrapper
                 collapses and the placeholder is invisible until bytes
@@ -1196,7 +1224,7 @@
               <div class="page-image-wrapper">
                 <img
                   src={imageSrc(lp.mp.imageUrl)}
-                  alt="Page {group.firstPageIndex + pi + 1}"
+                  alt="Page {pageNumberInChapter[group.firstPageIndex + pi] ?? group.firstPageIndex + pi + 1}"
                   width={lp.mp.width || 836}
                   height={lp.mp.height || 1200}
                   loading={imgLoadingMode(group.firstPageIndex + pi, currentPageIndex)}
@@ -1210,10 +1238,10 @@
                   <button
                     class="image-retry-btn"
                     type="button"
-                    aria-label="Retry loading page {group.firstPageIndex + pi + 1}"
+                    aria-label="Retry loading page {pageNumberInChapter[group.firstPageIndex + pi] ?? group.firstPageIndex + pi + 1}"
                     onclick={(e) => { e.stopPropagation(); retryImage(lp.mp.imageUrl); }}
                   >
-                    ↻ Reload page {group.firstPageIndex + pi + 1}
+                    ↻ Reload page {pageNumberInChapter[group.firstPageIndex + pi] ?? group.firstPageIndex + pi + 1}
                   </button>
                 {/if}
               </div>
