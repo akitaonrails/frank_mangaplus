@@ -102,6 +102,19 @@ export function buildChapterList(
   return { rows, offsets, totalChapters: ordered.length, unreadCount, hiddenCount };
 }
 
+/**
+ * Unambiguous label for the chapter-count header. The old
+ * "{unread} unread of {total}" read like a chapter position — a series
+ * whose newest chapter is #131 with 122 unread showed "122 unread of
+ * 134", which looks like "you're on chapter 122 of 134". Leading with
+ * the total and naming both figures removes that reading.
+ */
+export function chapterCountLabel(totalChapters: number, unreadCount: number): string {
+  if (totalChapters <= 0) return '';
+  const read = totalChapters - unreadCount;
+  return `${totalChapters} total · ${read} read · ${unreadCount} unread`;
+}
+
 /** Prefix sums of row heights. `offsets[rows.length]` is the total height. */
 export function buildOffsets(rows: ChapterRow[]): number[] {
   const offsets = new Array<number>(rows.length + 1);

@@ -4,6 +4,7 @@ import {
   flattenChapters,
   buildChapterList,
   buildOffsets,
+  chapterCountLabel,
   findRowIndex,
   visibleRange,
   rowHeight,
@@ -120,6 +121,23 @@ describe('buildChapterList visibility', () => {
       leadingDivider: '1-4',
     });
     expect(b.rows).toEqual([{ type: 'divider', label: '1-4' }]);
+  });
+});
+
+describe('chapterCountLabel', () => {
+  it('names total, read and unread unambiguously (Kagurabachi case)', () => {
+    // The exact numbers behind the "122 unread of 134" confusion: the
+    // label must not read like a chapter position.
+    expect(chapterCountLabel(134, 122)).toBe('134 total · 12 read · 122 unread');
+  });
+
+  it('handles all-read and all-unread', () => {
+    expect(chapterCountLabel(10, 0)).toBe('10 total · 10 read · 0 unread');
+    expect(chapterCountLabel(10, 10)).toBe('10 total · 0 read · 10 unread');
+  });
+
+  it('is empty when there are no chapters', () => {
+    expect(chapterCountLabel(0, 0)).toBe('');
   });
 });
 

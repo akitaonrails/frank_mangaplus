@@ -16,6 +16,7 @@
   import {
     flattenChapters,
     buildChapterList,
+    chapterCountLabel,
     visibleRange,
     type ChapterRow,
   } from '$lib/chapterListLogic';
@@ -339,7 +340,7 @@
           <h2 class="section-heading">
             Chapters
             {#if totalChapters > 0}
-              ({unreadCount} unread of {totalChapters})
+              <span class="chapter-count">{chapterCountLabel(totalChapters, unreadCount)}</span>
             {/if}
           </h2>
           <div class="chapter-actions">
@@ -366,6 +367,16 @@
             <button class="link-btn" onclick={showAllChapters}>Show all chapters</button>
           </p>
         {:else}
+          {#if readVis === 'hidden' && hiddenCount > 0}
+            <!-- Without this, a reader who's caught up on the newest
+                 chapters sees the list "end" at their newest UNREAD one
+                 (e.g. #122) while Continue jumps to a later read chapter
+                 (#131) — looking like missing chapters. State plainly
+                 that read chapters are hidden, with a one-click escape. -->
+            <button class="hidden-cue" onclick={showAllChapters}>
+              {hiddenCount} read chapter{hiddenCount === 1 ? '' : 's'} hidden · show all
+            </button>
+          {/if}
           <div
             class="chapter-scroll"
             onscroll={onScroll}
@@ -562,9 +573,37 @@
     letter-spacing: 0.05em;
   }
 
+  .chapter-count {
+    /* Non-uppercase, lighter — reads as a caption, not part of the
+       heading, and never like a "chapter N of M" position. */
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 500;
+    opacity: 0.85;
+  }
+
   .no-chapters {
     color: var(--text-muted);
     font-size: 0.9rem;
+  }
+
+  .hidden-cue {
+    display: block;
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 7px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-align: center;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .hidden-cue:hover {
+    color: var(--text);
+    border-color: var(--accent);
   }
 
   .chapter-scroll {
