@@ -109,18 +109,21 @@ export function nextReadVisibility(v: ReadVisibility): ReadVisibility {
 }
 
 // Reader page layout.
-//   - "single"       — one page per frame, the default
-//   - "double"       — sequential pairs starting from page 1: [1,2],[3,4],…
-//   - "double-cover" — first page solo, then pairs: [1],[2,3],[4,5],…
-//                      (matches printed manga where the cover is a single
-//                       page and the binding starts on the next spread)
-export type PageMode = 'single' | 'double' | 'double-cover';
+//   - "single" — one page per frame, the default
+//   - "double" — facing pages. The pairing adapts to each chapter from
+//                the API's spread markers (see buildPageGroups): the
+//                chapter's first spread decides whether the cover binds
+//                solo or pairs start on page 1, and a split spread
+//                always shares a frame.
+export type PageMode = 'single' | 'double';
 const KEY_PAGE_MODE = 'mp:pageMode';
 const KEY_TITLE_PAGE_MODE = (titleId: number) => `mp:pageMode:${titleId}`;
 function parsePageMode(v: string | null): PageMode | null {
-  if (v === 'double') return 'double';
-  if (v === 'double-cover') return 'double-cover';
   if (v === 'single') return 'single';
+  // 'double-cover' was the id of the former cover-offset layout, which
+  // the adaptive double layout now covers. Reading it as 'double' keeps
+  // preferences saved before the two layouts merged.
+  if (v === 'double' || v === 'double-cover') return 'double';
   return null;
 }
 export function getPageMode(): PageMode {
@@ -143,10 +146,9 @@ export function setPageModeForTitle(titleId: number, mode: PageMode) {
   // explicit saved layout, while still allowing every title to override it.
   setPageMode(mode);
 }
-// Cycle order driven by the D key / toggle button: single → double →
-// double-cover → single.
+// The D key / toggle button switches between the two layouts.
 export function nextPageMode(mode: PageMode): PageMode {
-  return mode === 'single' ? 'double' : mode === 'double' ? 'double-cover' : 'single';
+  return mode === 'single' ? 'double' : 'single';
 }
 
 // Reading-comfort filter applied to all manga pages. Warms the whites

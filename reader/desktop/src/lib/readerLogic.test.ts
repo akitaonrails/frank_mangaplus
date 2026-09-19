@@ -15,6 +15,8 @@ import {
   URL_EXPIRY_MARGIN_SECS,
   isSubscriptionLockError,
   keyToReaderAction,
+  PAGE_TYPE_LEFT,
+  PAGE_TYPE_RIGHT,
   retryImageSrc,
   RETRY_PARAM,
   type LoadedPage,
@@ -23,19 +25,29 @@ import type { Chapter, MangaPage } from './types';
 
 // Compact factory — every test uses the same shape so each case stays
 // focused on the behaviour rather than the noise.
-function page(chapterId: number, name = `Ch${chapterId}`): LoadedPage {
-  return {
-    mp: {} as MangaPage,
-    chapterId,
-    chapterName: name,
-  };
+function page(chapterId: number, name = `Ch${chapterId}`, type = 0): LoadedPage {
+  const mp: MangaPage = { imageUrl: '', width: 0, height: 0, type, encryptionKey: '' };
+  return { mp, chapterId, chapterName: name };
+}
+
+// One split spread as manga_viewer_v3 delivers it with split=yes:
+// the RIGHT half, then the LEFT half.
+function spread(chapterId: number): LoadedPage[] {
+  return [
+    page(chapterId, `Ch${chapterId}`, PAGE_TYPE_RIGHT),
+    page(chapterId, `Ch${chapterId}`, PAGE_TYPE_LEFT),
+  ];
+}
+
+// Group shape as page types, so a spread reads as [2, 1].
+function shape(groups: ReturnType<typeof buildPageGroups>): number[][] {
+  return groups.map(g => g.pages.map(p => p.mp.type));
 }
 
 describe('buildPageGroups', () => {
   it('returns empty for empty input regardless of mode', () => {
     expect(buildPageGroups([], 'single')).toEqual([]);
     expect(buildPageGroups([], 'double')).toEqual([]);
-    expect(buildPageGroups([], 'double-cover')).toEqual([]);
   });
 
   it('single mode: every page is its own group', () => {
@@ -46,54 +58,87 @@ describe('buildPageGroups', () => {
     expect(groups.every(g => g.pages.length === 1)).toBe(true);
   });
 
-  it('double mode: even page count pairs perfectly', () => {
-    const pages = Array.from({ length: 6 }, () => page(1));
-    const groups = buildPageGroups(pages, 'double');
-    expect(groups.map(g => g.firstPageIndex)).toEqual([0, 2, 4]);
-    expect(groups.every(g => g.pages.length === 2)).toBe(true);
+  it('double mode: a single-page cover binds solo, then pages pair', () => {
+    const odd = Array.from({ length: 5 }, () => page(1));
+    expect(buildPageGroups(odd, 'double').map(g => g.pages.length)).toEqual([1, 2, 2]);
+    const even = Array.from({ length: 6 }, () => page(1));
+    const groups = buildPageGroups(even, 'double');
+    expect(groups.map(g => g.pages.length)).toEqual([1, 2, 2, 1]); // solo trailing
+    expect(groups.map(g => g.firstPageIndex)).toEqual([0, 1, 3, 5]);
   });
 
-  it('double mode: odd page count leaves a solo at the end', () => {
-    const pages = Array.from({ length: 5 }, () => page(1));
-    const groups = buildPageGroups(pages, 'double');
-    expect(groups).toHaveLength(3);
-    expect(groups[0].pages.length).toBe(2);
-    expect(groups[1].pages.length).toBe(2);
-    expect(groups[2].pages.length).toBe(1); // solo trailing
-    expect(groups[2].firstPageIndex).toBe(4);
-  });
-
-  it('double mode: pairs never cross chapter boundaries', () => {
-    // 3 pages of chapter 1, then 3 pages of chapter 2
+  it('double mode: the cover rule resets at each chapter boundary', () => {
     const pages = [page(1), page(1), page(1), page(2), page(2), page(2)];
     const groups = buildPageGroups(pages, 'double');
-    // Expected: [c1p1,c1p2], [c1p3 solo], [c2p1,c2p2], [c2p3 solo]
-    expect(groups).toHaveLength(4);
-    expect(groups[0].pages.map(p => p.chapterId)).toEqual([1, 1]);
-    expect(groups[1].pages.map(p => p.chapterId)).toEqual([1]); // odd leftover from chapter 1
-    expect(groups[2].pages.map(p => p.chapterId)).toEqual([2, 2]);
-    expect(groups[3].pages.map(p => p.chapterId)).toEqual([2]); // odd leftover from chapter 2
+    // Chapter 1: [cover], [pair]; chapter 2: [cover], [pair]
+    expect(groups.map(g => g.pages.map(p => p.chapterId))).toEqual([[1], [1, 1], [2], [2, 2]]);
   });
 
-  it('double-cover mode: first page solo, then pairs', () => {
-    const pages = Array.from({ length: 5 }, () => page(1));
-    const groups = buildPageGroups(pages, 'double-cover');
-    expect(groups).toHaveLength(3);
-    expect(groups[0].pages.length).toBe(1); // cover solo
-    expect(groups[1].pages.length).toBe(2);
-    expect(groups[2].pages.length).toBe(2);
+  it('double mode: a cover spread fills the first frame and pairs start from page 1', () => {
+    const pages = [...spread(1), page(1), page(1), page(1)];
+    const groups = buildPageGroups(pages, 'double');
+    expect(shape(groups)).toEqual([[2, 1], [0, 0], [0]]);
   });
 
-  it('double-cover mode: cover offset resets at each chapter boundary', () => {
-    const pages = [page(1), page(1), page(1), page(2), page(2), page(2)];
-    const groups = buildPageGroups(pages, 'double-cover');
-    // Chapter 1: [solo], [pair]    — 3 pages
-    // Chapter 2: [solo], [pair]    — 3 pages
-    expect(groups).toHaveLength(4);
-    expect(groups[0].pages.length).toBe(1); // c1 cover
-    expect(groups[1].pages.length).toBe(2); // c1 rest
-    expect(groups[2].pages.length).toBe(1); // c2 cover  ← reset
-    expect(groups[3].pages.length).toBe(2); // c2 rest
+  it('double mode: a cover spread in a later chapter also pairs from its page 1', () => {
+    const pages = [page(1), page(1), page(1), ...spread(2), page(2), page(2)];
+    const groups = buildPageGroups(pages, 'double');
+    expect(shape(groups)).toEqual([[0], [0, 0], [2, 1], [0, 0]]);
+  });
+
+  // Live-observed layout (first chapter of "Hey! Devil Girl!"): three
+  // single pages, then a spread whose RIGHT half sits at index 3.
+  it('double mode: live-observed chapter keeps its spread whole', () => {
+    const pages = [page(1), page(1), page(1), ...spread(1), page(1), page(1)];
+    const groups = buildPageGroups(pages, 'double');
+    expect(shape(groups)).toEqual([[0], [0, 0], [2, 1], [0, 0]]);
+    expect(groups.map(g => g.firstPageIndex)).toEqual([0, 1, 3, 5]);
+  });
+
+  // Live-observed layout (first chapter of "Home at the Horizon"): the
+  // cover is a single page, but the first spread sits at index 2, so
+  // print pairs from page 1.
+  it('double mode: a first spread at an even offset starts pairs on page 1', () => {
+    const pages = [page(1), page(1), ...spread(1), page(1), page(1)];
+    const groups = buildPageGroups(pages, 'double');
+    expect(shape(groups)).toEqual([[0, 0], [2, 1], [0, 0]]);
+  });
+
+  it('double mode: a chapter with no spread binds its cover solo', () => {
+    const pages = [page(1), page(1), page(1)];
+    expect(shape(buildPageGroups(pages, 'double'))).toEqual([[0], [0, 0]]);
+  });
+
+  it('double mode: the page before an off-parity spread goes solo', () => {
+    // First spread at offset 1 (cover solo), second at offset 4.
+    const pages = [page(1), ...spread(1), page(1), ...spread(1), page(1)];
+    const groups = buildPageGroups(pages, 'double');
+    expect(shape(groups)).toEqual([[0], [2, 1], [0], [2, 1], [0]]);
+  });
+
+  it('double mode: keeps every spread whole wherever it falls', () => {
+    const pages = [page(1), ...spread(1), page(1), page(1), page(1), ...spread(1), ...spread(1)];
+    const groups = buildPageGroups(pages, 'double');
+    expect(shape(groups)).toEqual([[0], [2, 1], [0, 0], [0], [2, 1], [2, 1]]);
+  });
+
+  it('double mode: treats unmatched halves as ordinary pages', () => {
+    // LEFT before RIGHT is not a spread; a RIGHT half at a chapter end has no partner.
+    const pages = [
+      page(1, 'Ch1', PAGE_TYPE_LEFT),
+      page(1, 'Ch1', PAGE_TYPE_RIGHT),
+      page(1),
+      page(1, 'Ch1', PAGE_TYPE_RIGHT),
+      page(2, 'Ch2', PAGE_TYPE_LEFT),
+    ];
+    const groups = buildPageGroups(pages, 'double');
+    expect(shape(groups)).toEqual([[1], [2, 0], [2], [1]]);
+  });
+
+  it('double mode: never pairs across a chapter boundary, spread halves included', () => {
+    const pages = [page(1), page(1), page(1, 'Ch1', PAGE_TYPE_RIGHT), page(2, 'Ch2', PAGE_TYPE_LEFT), page(2), page(2)];
+    const groups = buildPageGroups(pages, 'double');
+    expect(groups.map(g => g.pages.map(p => p.chapterId))).toEqual([[1], [1, 1], [2], [2, 2]]);
   });
 });
 
@@ -175,11 +220,11 @@ describe('findGroupContainingPage', () => {
   it('returns the group index whose range covers pageIndex', () => {
     const pages = Array.from({ length: 5 }, () => page(1));
     const groups = buildPageGroups(pages, 'double');
-    // groups: [0-1], [2-3], [4]
+    // groups: [0], [1-2], [3-4]
     expect(findGroupContainingPage(groups, 0)).toBe(0);
-    expect(findGroupContainingPage(groups, 1)).toBe(0);
+    expect(findGroupContainingPage(groups, 1)).toBe(1);
     expect(findGroupContainingPage(groups, 2)).toBe(1);
-    expect(findGroupContainingPage(groups, 3)).toBe(1);
+    expect(findGroupContainingPage(groups, 3)).toBe(2);
     expect(findGroupContainingPage(groups, 4)).toBe(2);
   });
 
@@ -208,10 +253,10 @@ describe('firstGroupOfChapter', () => {
 
   it('finds the right group in double mode (pairs never cross chapter boundary)', () => {
     const groups = buildPageGroups(pages, 'double');
-    // groups: [c100 p1,p2], [c100 p3 solo], [c200 p1,p2], [c300 p1,p2], [c300 p3,p4]
+    // groups: [c100 p1], [c100 p2,p3], [c200 p1], [c200 p2], [c300 p1], [c300 p2,p3], [c300 p4]
     expect(firstGroupOfChapter(pages, groups, 100)).toBe(0);
-    expect(firstGroupOfChapter(pages, groups, 200)).toBe(2); // after the c100 leftover solo
-    expect(firstGroupOfChapter(pages, groups, 300)).toBe(3);
+    expect(firstGroupOfChapter(pages, groups, 200)).toBe(2); // each chapter opens on its solo cover
+    expect(firstGroupOfChapter(pages, groups, 300)).toBe(4);
   });
 
   it('returns -1 when the chapter id has no pages loaded', () => {
