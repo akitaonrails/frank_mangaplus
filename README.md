@@ -43,11 +43,12 @@ Press `D` (or click the layout icon in the header) and the reader pairs facing p
 
 ![Double-page spread on a widescreen monitor](docs/screenshots/reader-double-page.png)
 
-Three layouts cycle on the toggle:
+The toggle switches between two layouts:
 
-- **single** — one page at a time
-- **double** — sequential pairs from page 1
-- **double-cover** — first page of each chapter solo, then pairs (matches printed manga where the cover binds singly before the first spread)
+- **single**: one page at a time
+- **double**: facing pages, paired as printed
+
+Double mode reads the spread markers the API sends with every page and pairs each chapter the way it was printed. The chapter's first two-page spread shows where the facing pages fall: when it lines up with a solo cover, the cover shows alone and pairs start on the next page; when it lines up with page 1 (a cover drawn as a spread included), pairs start from page 1. A chapter without spreads opens on a solo cover, as a printed volume does. Every spread fills one frame, with the page before it shown solo if a spread ever falls out of step, so a spread is never cut in half.
 
 The choice persists across chapters and sessions.
 

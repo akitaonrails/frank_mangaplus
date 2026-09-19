@@ -1082,26 +1082,19 @@
     <button
       class="mode-toggle"
       onclick={togglePageMode}
-      title="Cycle page layout: single → double → cover-offset (press D)"
-      aria-label="Cycle page layout"
+      title="Toggle page layout: single ↔ double, paired as printed (press D)"
+      aria-label="Toggle page layout"
     >
       {#if pageMode === 'single'}
         <!-- single page -->
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <rect x="6" y="3" width="12" height="18" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>
         </svg>
-      {:else if pageMode === 'double'}
+      {:else}
         <!-- two equal pages side-by-side -->
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <rect x="2"  y="4" width="9" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
           <rect x="13" y="4" width="9" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
-        </svg>
-      {:else}
-        <!-- cover-offset: solo first then a pair -->
-        <svg viewBox="0 0 30 24" width="22" height="18" aria-hidden="true">
-          <rect x="1"  y="4" width="6" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
-          <rect x="11" y="4" width="7" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
-          <rect x="20" y="4" width="7" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
         </svg>
       {/if}
     </button>

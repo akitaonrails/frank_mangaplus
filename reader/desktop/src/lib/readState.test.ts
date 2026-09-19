@@ -90,14 +90,20 @@ describe('readState', () => {
     expect(getSortDescending()).toBe(true);
   });
 
-  it('page mode defaults to single and round-trips all three states', () => {
+  it('page mode defaults to single and round-trips both states', () => {
     expect(getPageMode()).toBe('single');
     setPageMode('double');
     expect(getPageMode()).toBe('double');
-    setPageMode('double-cover');
-    expect(getPageMode()).toBe('double-cover');
     setPageMode('single');
     expect(getPageMode()).toBe('single');
+  });
+
+  it('page mode reads the former double-cover layout as double', () => {
+    localStorage.setItem('mp:pageMode', 'double-cover');
+    expect(getPageMode()).toBe('double');
+    localStorage.setItem('mp:pageMode:7', 'double-cover');
+    setPageMode('single');
+    expect(getPageModeForTitle(7)).toBe('double');
   });
 
   it('page mode treats unknown values as single', () => {
@@ -109,10 +115,10 @@ describe('readState', () => {
     setPageMode('double');
     expect(getPageModeForTitle(100)).toBe('double');
 
-    setPageModeForTitle(100, 'double-cover');
+    setPageModeForTitle(100, 'double');
     setPageModeForTitle(200, 'single');
 
-    expect(getPageModeForTitle(100)).toBe('double-cover');
+    expect(getPageModeForTitle(100)).toBe('double');
     expect(getPageModeForTitle(200)).toBe('single');
     expect(getPageModeForTitle(300)).toBe('single');
   });
@@ -124,10 +130,9 @@ describe('readState', () => {
     expect(getPageModeForTitle(42)).toBe('double');
   });
 
-  it('nextPageMode cycles single → double → double-cover → single', () => {
+  it('nextPageMode toggles single ↔ double', () => {
     expect(nextPageMode('single')).toBe('double');
-    expect(nextPageMode('double')).toBe('double-cover');
-    expect(nextPageMode('double-cover')).toBe('single');
+    expect(nextPageMode('double')).toBe('single');
   });
 
   it('per-chapter last-read page round-trips', () => {

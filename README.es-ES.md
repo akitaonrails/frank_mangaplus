@@ -45,10 +45,11 @@ Presiona `D` (o haz clic en el ícono de diseño en el encabezado) y el lector e
 
 ![Doble página en un monitor panorámico](docs/screenshots/reader-double-page.png)
 
-Se alternan tres diseños al activar:
-- **single** — una página a la vez
-- **double** — pares secuenciales desde la página 1
-- **double-cover** — la primera página de cada capítulo en solitario, luego pares (coincide con el manga impreso donde la portada se encuaderna sola antes de la primera doble página)
+El botón alterna entre dos diseños:
+- **single**: una página a la vez
+- **double**: páginas enfrentadas, emparejadas como se imprimió cada capítulo
+
+El modo doble lee las marcas de doble página que la API envía con cada página y empareja cada capítulo como se imprimió. La primera doble página del capítulo indica dónde caen las páginas enfrentadas: si coincide con una portada en solitario, la portada aparece sola y los pares empiezan en la página siguiente; si coincide con la página 1 (incluida una portada dibujada como doble página), los pares empiezan desde la página 1. Un capítulo sin dobles páginas abre con la portada en solitario, como un tomo impreso. Cada doble página ocupa un solo marco, con la página anterior en solitario si alguna queda desfasada, así que una doble página nunca queda partida.
 
 La elección se mantiene entre capítulos y sesiones.
 

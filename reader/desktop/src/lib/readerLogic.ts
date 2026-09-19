@@ -18,7 +18,7 @@ export type LoadedPage = {
 
 /**
  * A rendered frame: one page (single mode), one or two pages from the
- * same chapter (double / double-cover modes). `firstPageIndex` is the
+ * same chapter (double mode). `firstPageIndex` is the
  * offset into the flat `LoadedPage[]` of the leftmost (in reading order)
  * page in the group — used by the page indicator and resume logic.
  */
@@ -27,17 +27,63 @@ export type PageGroup = {
   firstPageIndex: number;
 };
 
+/** MangaPage.type values (PageOuterClass.java, v2.3.0): 0 SINGLE,
+ *  1 LEFT, 2 RIGHT, 3 DOUBLE. manga_viewer_v3 is requested with
+ *  split=yes, which delivers every spread as a RIGHT half followed by
+ *  its LEFT half (CDN files `Nr.webp` then `Nl.webp`); DOUBLE only
+ *  appears with split=no. Verified against live responses. */
+export const PAGE_TYPE_LEFT = 1;
+export const PAGE_TYPE_RIGHT = 2;
+
+/** True when pages[i] and pages[i + 1] are the two halves of one split
+ *  spread in the same chapter. */
+function startsSpread(pages: LoadedPage[], i: number): boolean {
+  const a = pages[i];
+  const b = pages[i + 1];
+  return (
+    a !== undefined &&
+    b !== undefined &&
+    a.chapterId === b.chapterId &&
+    a.mp.type === PAGE_TYPE_RIGHT &&
+    b.mp.type === PAGE_TYPE_LEFT
+  );
+}
+
+/**
+ * Whether the chapter starting at `start` opens with a solo cover in
+ * double mode. Print keeps every spread on facing pages, so the
+ * chapter's first split spread fixes where its pairs start: a RIGHT
+ * half at an even offset (a cover spread included) means pairs start
+ * on page 1, an odd offset means the cover binds solo. A chapter with
+ * no spread binds its cover solo, as printed volumes do.
+ */
+function coverBindsSolo(pages: LoadedPage[], start: number): boolean {
+  const chapterId = pages[start].chapterId;
+  for (let i = start; i < pages.length && pages[i].chapterId === chapterId; i++) {
+    if (startsSpread(pages, i)) return (i - start) % 2 === 1;
+  }
+  return true;
+}
+
 /**
  * Group pages into frames according to the layout mode. Pairs never
  * cross chapter boundaries — if a chapter has an odd page count, its
  * trailing page is solo, and the next chapter starts a fresh group.
  *
- *   single        → [p1] [p2] [p3] [p4]
- *   double        → [p1, p2] [p3, p4]
- *   double-cover  → [p1] [p2, p3] [p4, p5] (cover binds singly)
+ *   single → [p1] [p2] [p3] [p4]
+ *   double → [p1] [p2, p3] [p4r, p5l]   first spread at an odd offset
+ *            [p1, p2] [p3r, p4l]        first spread at an even offset
+ *            [p1r, p2l] [p3, p4]        cover is a split spread
  *
- * In double-cover mode the "cover" resets at every chapter boundary —
- * matches how printed manga rebinds covers per volume.
+ * In double mode each chapter decides on its own where pairs start
+ * (see coverBindsSolo), and the decision resets at every chapter
+ * boundary.
+ *
+ * The two halves of a split spread (RIGHT then LEFT, see
+ * PAGE_TYPE_RIGHT) always share a frame: should a later spread fall
+ * off the chapter's parity, the page that would otherwise pair with
+ * its RIGHT half renders solo instead, so no spread is ever cut across
+ * two frames.
  */
 export function buildPageGroups(pages: LoadedPage[], mode: PageMode): PageGroup[] {
   if (mode === 'single' || pages.length === 0) {
@@ -45,22 +91,30 @@ export function buildPageGroups(pages: LoadedPage[], mode: PageMode): PageGroup[
   }
   const groups: PageGroup[] = [];
   let i = 0;
-  let coverOffsetActive = mode === 'double-cover';
+  let atChapterStart = true;
   let currentChapter = pages[0].chapterId;
   while (i < pages.length) {
     const a = pages[i];
     if (a.chapterId !== currentChapter) {
       currentChapter = a.chapterId;
-      if (mode === 'double-cover') coverOffsetActive = true;
+      atChapterStart = true;
     }
-    if (coverOffsetActive) {
-      groups.push({ pages: [a], firstPageIndex: i });
-      coverOffsetActive = false;
-      i += 1;
+    if (startsSpread(pages, i)) {
+      groups.push({ pages: [a, pages[i + 1]], firstPageIndex: i });
+      atChapterStart = false;
+      i += 2;
       continue;
     }
+    if (atChapterStart) {
+      atChapterStart = false;
+      if (coverBindsSolo(pages, i)) {
+        groups.push({ pages: [a], firstPageIndex: i });
+        i += 1;
+        continue;
+      }
+    }
     const b = pages[i + 1];
-    if (b && b.chapterId === a.chapterId) {
+    if (b && b.chapterId === a.chapterId && !startsSpread(pages, i + 1)) {
       groups.push({ pages: [a, b], firstPageIndex: i });
       i += 2;
     } else {
