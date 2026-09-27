@@ -349,8 +349,10 @@ fn strip_retry_param(url: &str) -> String {
 mod tests {
     use super::{
         filter_to_language, lang_str_to_enum, merge_views, persistent_config_dir_from,
-        resolve_secret, strip_retry_param, write_secret_file,
+        resolve_secret, strip_retry_param,
     };
+    #[cfg(unix)]
+    use super::write_secret_file;
     use mangaplus_api::proto;
 
     #[test]
