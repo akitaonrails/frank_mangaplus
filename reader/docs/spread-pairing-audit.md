@@ -97,8 +97,9 @@ cover-solo default keeps 20-21 whole and tears the title spread.
 
 This is a property of these titles, not of the English edition. The probe
 behind issue #9 found 112 marked spreads in 50 of the 108 first chapters
-of the English serializing catalog, so most English titles mark their
-spreads. One Piece and Dandadan are English titles that do not.
+of the English serializing catalog, so marked spreads are common in
+English titles. One Piece and Dandadan are English titles that do not
+mark them.
 
 The missing markers are server-side. One Piece chapters 1-3 and
 #1191-#1193 were requested in both editions (12 chapters) under seven
