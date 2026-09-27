@@ -18,11 +18,19 @@ jobs:
     steps:
       - name: Determine version
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG="${{ github.event.release.tag_name }}"
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG="$RELEASE_TAG"
           else
-            TAG="${{ github.event.inputs.tag }}"
+            TAG="$INPUT_TAG"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Refusing invalid release tag: $TAG" >&2
+            exit 1
           fi
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -30,9 +38,10 @@ jobs:
 
       - name: Download AppImage and compute SHA256
         id: checksum
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          VERSION="${{ steps.version.outputs.version }}"
           FILENAME="FRANK.MANGA+_${VERSION}_amd64.AppImage"
           URL="https://github.com/akitaonrails/frank_mangaplus/releases/download/${TAG}/${FILENAME}"
           echo "Downloading ${URL}..."
@@ -42,9 +51,10 @@ jobs:
           echo "SHA256: ${SHA256}"
 
       - name: Generate PKGBUILD
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256: ${{ steps.checksum.outputs.sha256 }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          SHA256="${{ steps.checksum.outputs.sha256 }}"
           cat > PKGBUILD << 'EOF'
           # Maintainer: AkitaOnRails <fabio.akita@gmail.com>
           pkgname=mangaplus-reader-bin
@@ -113,7 +123,7 @@ jobs:
           sed -i "s/SHA256_PLACEHOLDER/${SHA256}/g" PKGBUILD
 
       - name: Publish to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        uses: KSXGitHub/github-actions-deploy-aur@2ac5a4c1d7035885d46b10e3193393be8460b6f1 # v4.1.1
         with:
           pkgname: mangaplus-reader-bin
           pkgbuild: ./PKGBUILD
