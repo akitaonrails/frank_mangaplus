@@ -1,4 +1,5 @@
 use mangaplus_api::{proto, register_new_device, Client, ClientConfig};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::http::Response;
@@ -89,11 +90,11 @@ async fn set_secret(
         return Err("empty secret".into());
     }
     // Persist to disk first; if that fails the in-memory client stays as-is.
-    let path = secret_file();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
-    }
-    std::fs::write(&path, &trimmed).map_err(|e| format!("write secret file: {e}"))?;
+    let path = secret_file().ok_or_else(|| {
+        "no private config directory is available; set XDG_CONFIG_HOME, APPDATA, or HOME"
+            .to_string()
+    })?;
+    write_secret_file(&path, trimmed.as_bytes())?;
     // User-pasted secret supersedes any prior auto-registered session,
     // so clear the "you're on free tier" marker. Best-effort delete.
     let _ = std::fs::remove_file(auto_register_flag_file());
@@ -118,24 +119,48 @@ async fn set_secret(
 /// independently of `AppState`.
 struct SchemeClientState(Arc<std::sync::Mutex<Arc<Client>>>);
 
-/// XDG config dir holding the on-disk secret file fallback.
-/// Linux/macOS: ~/.config/mangaplus-reader/secret
-/// Windows:     %APPDATA%/mangaplus-reader/secret
+/// Config dir for non-credential state such as render recovery markers.
+/// These diagnostics may use a temporary fallback when no home/config
+/// environment is available; credentials use `persistent_config_dir` only.
 fn config_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg).join("mangaplus-reader");
-    }
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        return PathBuf::from(appdata).join("mangaplus-reader");
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".config/mangaplus-reader");
-    }
-    std::env::temp_dir().join("mangaplus-reader")
+    persistent_config_dir().unwrap_or_else(|| std::env::temp_dir().join("mangaplus-reader"))
 }
 
-fn secret_file() -> PathBuf {
-    config_dir().join("secret")
+/// Return only a user-private, persistent config location for credentials.
+/// Linux/macOS: ~/.config/mangaplus-reader/secret
+/// Windows:     %APPDATA%/mangaplus-reader/secret
+fn persistent_config_dir() -> Option<PathBuf> {
+    persistent_config_dir_from(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("APPDATA"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn persistent_config_dir_from(
+    xdg: Option<std::ffi::OsString>,
+    appdata: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    xdg.filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| path.join("mangaplus-reader"))
+        .or_else(|| {
+            appdata
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .map(|path| path.join("mangaplus-reader"))
+        })
+        .or_else(|| {
+            home
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .map(|path| path.join(".config/mangaplus-reader"))
+        })
+}
+
+fn secret_file() -> Option<PathBuf> {
+    persistent_config_dir().map(|path| path.join("secret"))
 }
 
 /// Marker file that exists exactly when the current secret on disk was
@@ -152,16 +177,21 @@ fn auto_register_flag_file() -> PathBuf {
 /// config file. Returns an empty string if neither has a usable value —
 /// the caller may then auto-register a fresh free-tier device.
 fn read_secret() -> String {
-    resolve_secret(
-        std::env::var("MANGAPLUS_SECRET").ok().as_deref(),
-        &secret_file(),
-    )
+    let env_secret = std::env::var("MANGAPLUS_SECRET").ok();
+    if let Some(path) = secret_file() {
+        resolve_secret(env_secret.as_deref(), &path)
+    } else {
+        env_secret
+            .as_deref()
+            .map(str::trim)
+            .filter(|secret| !secret.is_empty())
+            .unwrap_or_default()
+            .to_string()
+    }
 }
 
-/// Pure resolution: env value (if non-empty after trimming) wins, then
-/// the file contents (if readable and non-empty after trimming), else
-/// empty string. Split from `read_secret` so it's unit-testable without
-/// touching real env or filesystem.
+/// Resolve an explicit env value first, then a regular on-disk secret. Reading
+/// the file also migrates its Unix permissions to user-only access.
 fn resolve_secret(env_val: Option<&str>, path: &std::path::Path) -> String {
     if let Some(s) = env_val {
         let s = s.trim();
@@ -169,10 +199,120 @@ fn resolve_secret(env_val: Option<&str>, path: &std::path::Path) -> String {
             return s.to_string();
         }
     }
-    if let Ok(s) = std::fs::read_to_string(path) {
+    if let Ok(s) = read_secret_file(path) {
         return s.trim().to_string();
     }
     String::new()
+}
+
+fn read_secret_file(path: &std::path::Path) -> Result<String, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "secret path has no parent directory".to_string())?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|e| format!("inspect config dir: {e}"))?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err("config path must be a real directory, not a symlink".into());
+    }
+    harden_config_dir_permissions(parent)?;
+
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("inspect secret file: {e}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("secret path must be a regular file, not a symlink".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|e| format!("open secret file: {e}"))?;
+    if !file
+        .metadata()
+        .map_err(|e| format!("inspect open secret file: {e}"))?
+        .is_file()
+    {
+        return Err("secret path must be a regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("secure secret file: {e}"))?;
+    }
+    let mut value = String::new();
+    file.read_to_string(&mut value)
+        .map_err(|e| format!("read secret file: {e}"))?;
+    Ok(value)
+}
+
+/// Persist a password-equivalent device secret without exposing a partial or
+/// world-readable file. The temporary file is created in the destination
+/// directory and atomically renamed over the old regular file.
+fn write_secret_file(path: &std::path::Path, value: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "secret path has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
+
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|e| format!("inspect config dir: {e}"))?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err("config path must be a real directory, not a symlink".into());
+    }
+    harden_config_dir_permissions(parent)?;
+
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err("secret path must be a regular file, not a symlink".into());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("inspect secret file: {error}")),
+    }
+
+    let mut temp = tempfile::Builder::new()
+        .prefix(".secret.tmp-")
+        .tempfile_in(parent)
+        .map_err(|e| format!("create temporary secret file: {e}"))?;
+    harden_secret_permissions(temp.path())?;
+    temp.as_file_mut()
+        .write_all(value)
+        .map_err(|e| format!("write temporary secret file: {e}"))?;
+    temp.as_file()
+        .sync_all()
+        .map_err(|e| format!("sync temporary secret file: {e}"))?;
+    temp.persist(path)
+        .map_err(|e| format!("replace secret file: {}", e.error))?;
+    harden_secret_permissions(path)
+}
+
+#[cfg(unix)]
+fn harden_config_dir_permissions(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("secure config dir: {e}"))
+}
+
+#[cfg(not(unix))]
+fn harden_config_dir_permissions(_path: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_secret_permissions(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("secure secret file: {e}"))
+}
+
+#[cfg(not(unix))]
+fn harden_secret_permissions(_path: &std::path::Path) -> Result<(), String> {
+    Ok(())
 }
 
 /// Query parameter the reader appends to bust a failed image load.
@@ -207,9 +347,13 @@ fn strip_retry_param(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_to_language, lang_str_to_enum, merge_views, resolve_secret, strip_retry_param};
+    use super::{
+        filter_to_language, lang_str_to_enum, merge_views, persistent_config_dir_from,
+        resolve_secret, strip_retry_param,
+    };
+    #[cfg(unix)]
+    use super::write_secret_file;
     use mangaplus_api::proto;
-    use std::io::Write;
 
     #[test]
     fn strip_retry_param_removes_only_the_retry_key() {
@@ -468,25 +612,28 @@ mod tests {
 
     #[test]
     fn env_wins_over_file() {
-        let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        write!(tmp, "from-file").unwrap();
-        let resolved = resolve_secret(Some("from-env"), tmp.path());
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("secret");
+        std::fs::write(&path, "from-file").unwrap();
+        let resolved = resolve_secret(Some("from-env"), &path);
         assert_eq!(resolved, "from-env");
     }
 
     #[test]
     fn falls_back_to_file_when_env_absent() {
-        let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        writeln!(tmp, "  from-file").unwrap();
-        let resolved = resolve_secret(None, tmp.path());
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("secret");
+        std::fs::write(&path, "  from-file\n").unwrap();
+        let resolved = resolve_secret(None, &path);
         assert_eq!(resolved, "from-file");
     }
 
     #[test]
     fn falls_back_to_file_when_env_is_blank() {
-        let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        write!(tmp, "from-file").unwrap();
-        let resolved = resolve_secret(Some("   "), tmp.path());
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("secret");
+        std::fs::write(&path, "from-file").unwrap();
+        let resolved = resolve_secret(Some("   "), &path);
         assert_eq!(resolved, "from-file");
     }
 
@@ -495,6 +642,80 @@ mod tests {
         let path = std::path::Path::new("/nonexistent/path/that/does/not/exist");
         let resolved = resolve_secret(None, path);
         assert_eq!(resolved, "");
+    }
+
+    #[test]
+    fn persistent_config_dir_never_falls_back_to_shared_temp() {
+        assert_eq!(persistent_config_dir_from(None, None, None), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_write_is_private_atomic_and_hardens_existing_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("mangaplus-reader");
+        let secret = config.join("secret");
+
+        write_secret_file(&secret, b"first").unwrap();
+        assert_eq!(std::fs::read_to_string(&secret).unwrap(), "first");
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&secret).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(resolve_secret(None, &secret), "first");
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&secret).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        write_secret_file(&secret, b"replacement").unwrap();
+        assert_eq!(std::fs::read_to_string(&secret).unwrap(), "replacement");
+        assert_eq!(
+            std::fs::metadata(&secret).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(std::fs::read_dir(&config)
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".secret.tmp-")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_read_and_write_reject_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("mangaplus-reader");
+        std::fs::create_dir(&config).unwrap();
+        let target = root.path().join("target");
+        std::fs::write(&target, "do-not-overwrite").unwrap();
+        let secret = config.join("secret");
+        symlink(&target, &secret).unwrap();
+
+        assert_eq!(resolve_secret(None, &secret), "");
+        assert!(write_secret_file(&secret, b"new-secret").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "do-not-overwrite");
+
+        let linked_config = root.path().join("linked-config");
+        symlink(&config, &linked_config).unwrap();
+        assert!(write_secret_file(&linked_config.join("secret"), b"new-secret").is_err());
     }
 }
 
@@ -509,6 +730,12 @@ mod tests {
 /// a paid subscription, they can paste their phone-extracted secret via
 /// `set_secret` and it overwrites this one.
 fn auto_register_secret() -> String {
+    let Some(path) = secret_file() else {
+        eprintln!(
+            "[mangaplus-reader] auto-register: no private config directory is available"
+        );
+        return String::new();
+    };
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -521,18 +748,15 @@ fn auto_register_secret() -> String {
     };
     match rt.block_on(register_new_device()) {
         Ok(secret) => {
-            let path = secret_file();
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = write_secret_file(&path, secret.as_bytes()) {
+                eprintln!("[mangaplus-reader] auto-register: persisting secret failed: {e}");
+                return String::new();
             }
             // Mark the session as auto-registered + unacknowledged so the
             // frontend can prompt the user about upgrading to subscriber.
             // Best-effort write — if it fails the only consequence is the
             // prompt doesn't show, the secret still works.
             let _ = std::fs::write(auto_register_flag_file(), "");
-            if let Err(e) = std::fs::write(&path, &secret) {
-                eprintln!("[mangaplus-reader] auto-register: persisting secret failed: {e}");
-            }
             eprintln!("[mangaplus-reader] auto-register: registered new free-tier device");
             secret
         }

@@ -19,31 +19,45 @@ step() { printf '\n\033[1;34m==>\033[0m %s\n' "$1"; }
 ok()   { printf '   \033[1;32m✓\033[0m %s\n' "$1"; }
 fail() { printf '   \033[1;31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 
-step "1/6  cargo test -p mangaplus-api  +  clippy -D warnings"
+step "1/7  GitHub Actions immutable-pin policy"
+if ! awk '
+  /^[[:space:]]*(-[[:space:]]+)?uses:/ {
+    ref = ($1 == "-") ? $3 : $2
+    if (ref !~ /@[0-9a-f]{40}$/) {
+      print FILENAME ":" FNR ": " ref
+      failed = 1
+    }
+  }
+  END { exit failed }
+' ../.github/workflows/*.yml; then
+  fail "every GitHub Action must use a full 40-character commit SHA"
+fi
+ok "all GitHub Actions are pinned"
+
+step "2/7  cargo test -p mangaplus-api  +  clippy -D warnings"
 # Run the EXACT commands CI runs, so a green local run means a green CI run.
 cargo test -p mangaplus-api --quiet 2>&1 | tail -3
 cargo clippy -p mangaplus-api --lib --tests -- -D warnings 2>&1 | tail -3
 ok "api unit + fixture tests + clippy pass"
 
-step "2/6  cargo test -p mangaplus-desktop  +  clippy"
+step "3/7  cargo test -p mangaplus-desktop  +  clippy"
 cargo test -p mangaplus-desktop --quiet 2>&1 | tail -3
 cargo clippy -p mangaplus-desktop --lib --tests -- -D warnings 2>&1 | tail -3
 ok "Tauri backend tests + clippy passes"
 
-step "3/6  bun run test  (vitest unit tests for the TS lib)"
+step "4/7  bun run test  (vitest unit tests for the TS lib)"
 ( cd desktop && bun run test ) 2>&1 | tail -6
 ok "vitest passes"
 
-step "4/6  bun run check  (svelte-check TS)"
-# svelte-check has some pre-existing warnings; only fail on hard errors.
-( cd desktop && bun run check ) 2>&1 | tail -3 || true
-ok "svelte-check ran (review output above)"
+step "5/7  bun run check  (svelte-check TS)"
+( cd desktop && bun run check ) 2>&1 | tail -3
+ok "svelte-check passes"
 
-step "5/6  bun run build  (production static export)"
+step "6/7  bun run build  (production static export)"
 ( cd desktop && bun run build ) 2>&1 | tail -3
 ok "production build succeeded"
 
-step "6/6  vite dev probe  (catches PostCSS style-extraction bugs)"
+step "7/7  vite dev probe  (catches PostCSS style-extraction bugs)"
 cd desktop
 # Start vite dev in background
 bun run dev > /tmp/verify-vite.log 2>&1 &

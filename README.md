@@ -50,6 +50,15 @@ The toggle switches between two layouts:
 
 Double mode reads the spread markers the API sends with every page and pairs each chapter the way it was printed. The chapter's first two-page spread shows where the facing pages fall: when it lines up with a solo cover, the cover shows alone and pairs start on the next page; when it lines up with page 1 (a cover drawn as a spread included), pairs start from page 1. A chapter without spreads opens on a solo cover, as a printed volume does. Every spread fills one frame, with the page before it shown solo if a spread ever falls out of step, so a spread is never cut in half.
 
+Some chapters do not include spread markers. In those chapters, press `P` (or
+click the pairing-shift icon) at a wrongly paired frame to shift pairing from
+that point. On page 1 this toggles whether the cover is solo; later corrections
+make the selected page solo and shift every following pair. You can save
+multiple corrections in one chapter. Pressing `P` again removes the current
+correction and any later corrections that depend on it. Manual corrections are
+stored per chapter and are disabled whenever authoritative spread markers are
+available.
+
 The choice persists across chapters and sessions.
 
 ### Night-reading sepia filter

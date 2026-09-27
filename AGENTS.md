@@ -35,6 +35,7 @@
 - Premium image fetches require the `plus_vw_token` cookie set by `manga_viewer_v3`; browser `<img>` requests must go through the Tauri `mpimg://` protocol so Rust can send the cookie and UA.
 - Use `src/lib/img.ts` `proxied(...)` for CDN image URLs. Do not rename it to `img`; that name previously broke Svelte 5 style extraction/PostCSS in dev mode.
 - `MANGAPLUS_SECRET` overrides the on-disk secret. Without an env/config secret, startup auto-registers a free-tier device and writes local config under the platform config dir.
+- The on-disk device secret is password-equivalent: writes must stay atomic and user-private (`0700` config dir / `0600` file on Unix), existing files are hardened on read, symlinks are rejected, and credentials must never fall back to a shared temporary directory.
 - Image/cache data lives under XDG-style cache dirs such as `~/.cache/mangaplus-reader/`; local secret/render config lives under `~/.config/mangaplus-reader/` on Linux.
 - The image cache (`<cache>/title/…`) is GC'd at startup to a byte budget, oldest-mtime first (`MANGAPLUS_IMAGE_CACHE_MAX_MB`, default 2048); the catalog SWR cache at the cache root is never touched by GC.
 - Page image URLs are signed with ~1-2h `expires=`; the reader re-fetches a chapter to re-sign them (also refreshing the `plus_vw_token` cookie) on image error, on visibilitychange, and via a minutely sweep — see `isUrlExpired` in `src/lib/readerLogic.ts`.
