@@ -67,11 +67,11 @@ ch1-3 in both languages:
 
 The pairing is right here because these chapters happen to open on a
 widow-left page and the only real spread (Romance Dawn) happens to sit at
-an odd offset. The code cannot see the unmarked spread, so it cannot
-protect it: shift the chapter by one leading page and the splash would be
-torn across two frames with no way for the current logic to notice, and a
-markerless chapter that should pair from page 1 would be mispaired
-end-to-end.
+an odd offset. Automatic detection cannot see the unmarked spread: shift
+the chapter by one leading page and the splash would be torn across two
+frames, and a markerless chapter that should pair from page 1 would be
+mispaired end-to-end. The manual correction described below now gives the
+reader a way to fix that missing server metadata.
 
 ## Parity luck already fails
 
@@ -120,7 +120,28 @@ halves are narrower than its single pages (1403 against 1444 for #1191).
 No request parameter tried recovers the spread information for these
 English titles.
 
-## Recommendation (not yet implemented)
+## Resolution: manual pairing shifts
+
+For chapters with no API-marked spread, the reader now exposes a
+pairing-shift button and the `P` shortcut in double mode. Chapters with
+any authoritative RIGHT/LEFT pair keep the control disabled. Corrections
+are persisted per chapter as zero-based page offsets:
+
+- A shift at offset 0 inverts the automatic cover-solo versus
+  pair-from-page-1 decision.
+- A later shift makes its page solo, then resumes pairing from the next
+  page.
+- Multiple saved shifts correct mixed-parity chapters such as Dandadan
+  #215.
+- Removing a shift also clears later corrections whose parity depended
+  on it.
+- A chapter containing any RIGHT/LEFT pair from the API ignores all
+  stale manual shifts and uses automatic marker-based grouping.
+
+This is deterministic and user-directed; it does not pretend the client
+can infer unmarked art seams from metadata the server did not send.
+
+## Possible automatic follow-up
 
 Keep the RIGHT/LEFT `type` markers as the primary signal: where they are
 sent they are cheap and unambiguous, and the existing pairing already
@@ -135,7 +156,7 @@ on that evidence, and fall back to cover-solo only when there is none. This
 removes the parity-luck dependency for titles like One Piece that never set
 the markers, without changing behaviour for titles that do.
 
-Practical notes for whoever implements it:
+Practical notes for an automatic fallback:
 
 - The landscape-aspect check is free from metadata: `MangaPage` already
   carries `width` and `height`, so no decode is needed. It does not help

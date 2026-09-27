@@ -56,6 +56,7 @@
         <h3>Keyboard — layout &amp; viewing</h3>
         <dl>
           <dt><kbd>D</kbd></dt><dd>Toggle layout: single ↔ double (paired as printed)</dd>
+          <dt><kbd>P</kbd></dt><dd>Shift double-page pairing in an unmarked chapter</dd>
           <dt><kbd>F</kbd></dt><dd>Cycle eye-protection filter: off → low → med → high</dd>
           <dt><kbd>R</kbd></dt><dd>Reload any images that failed to load</dd>
         </dl>

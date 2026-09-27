@@ -4,6 +4,7 @@ import {
   scanChapterBounds,
   chapterIdAfter,
   chapterIdBefore,
+  chapterHasMarkedSpread,
   chapterLockLabel,
   findGroupContainingPage,
   firstGroupOfChapter,
@@ -139,6 +140,63 @@ describe('buildPageGroups', () => {
     const pages = [page(1), page(1), page(1, 'Ch1', PAGE_TYPE_RIGHT), page(2, 'Ch2', PAGE_TYPE_LEFT), page(2), page(2)];
     const groups = buildPageGroups(pages, 'double');
     expect(groups.map(g => g.pages.map(p => p.chapterId))).toEqual([[1], [1, 1], [2], [2, 2]]);
+  });
+
+  it('manual shift at chapter offset zero inverts the automatic cover decision', () => {
+    const pages = Array.from({ length: 5 }, () => page(1));
+    const shifts = new Map([[1, [0]]]);
+
+    expect(buildPageGroups(pages, 'double', shifts).map(g => g.pages.length)).toEqual([2, 2, 1]);
+
+    // A chapter with an authoritative marker ignores stale manual shifts.
+    // Its first spread at even offset 2 keeps automatic pairing on page 1.
+    const autoPairsFromStart = [page(1), page(1), ...spread(1), page(1)];
+    expect(buildPageGroups(autoPairsFromStart, 'double', shifts).map(g => g.pages.length)).toEqual([
+      2, 2, 1,
+    ]);
+  });
+
+  it('manual mid-chapter shifts make their pages solo and support multiple corrections', () => {
+    const pages = Array.from({ length: 9 }, () => page(1));
+    const shifts = new Map([[1, [3, 6]]]);
+
+    expect(buildPageGroups(pages, 'double', shifts).map(g => g.pages.length)).toEqual([1, 2, 1, 2, 1, 2]);
+    expect(buildPageGroups(pages, 'double', shifts).map(g => g.firstPageIndex)).toEqual([0, 1, 3, 4, 6, 7]);
+  });
+
+  it('ignores every stale shift in a chapter with an API-marked spread', () => {
+    const pages = [page(1), page(1), ...spread(1), page(1), page(1)];
+    const automatic = buildPageGroups(pages, 'double');
+    // Cover, both pages around the marker, RIGHT, LEFT, and trailing pages.
+    const shifts = new Map([[1, [0, 1, 2, 3, 4, 5]]]);
+
+    expect(buildPageGroups(pages, 'double', shifts)).toEqual(automatic);
+    expect(shape(automatic)).toEqual([[0, 0], [2, 1], [0, 0]]);
+  });
+
+  it('manual shifts are chapter-local and pairing still resets at boundaries', () => {
+    const pages = [page(1), page(1), page(1), page(2), page(2), page(2)];
+    const shifts = new Map([[1, [0]]]);
+
+    expect(buildPageGroups(pages, 'double', shifts).map(g => g.pages.map(p => p.chapterId))).toEqual([
+      [1, 1], [1], [2], [2, 2],
+    ]);
+  });
+});
+
+describe('chapterHasMarkedSpread', () => {
+  it('requires adjacent RIGHT/LEFT halves in the same requested chapter', () => {
+    const pages = [
+      page(1, 'Ch1', PAGE_TYPE_RIGHT),
+      page(2, 'Ch2', PAGE_TYPE_LEFT),
+      page(2),
+      ...spread(3),
+    ];
+
+    expect(chapterHasMarkedSpread(pages, 1)).toBe(false);
+    expect(chapterHasMarkedSpread(pages, 2)).toBe(false);
+    expect(chapterHasMarkedSpread(pages, 3)).toBe(true);
+    expect(chapterHasMarkedSpread(pages, 4)).toBe(false);
   });
 });
 
@@ -312,6 +370,8 @@ describe('keyToReaderAction', () => {
   it('maps the toggles + escape', () => {
     expect(keyToReaderAction('d')).toBe('toggle-page-mode');
     expect(keyToReaderAction('D')).toBe('toggle-page-mode');
+    expect(keyToReaderAction('p')).toBe('shift-page-pairing');
+    expect(keyToReaderAction('P')).toBe('shift-page-pairing');
     expect(keyToReaderAction('f')).toBe('toggle-eye-filter');
     expect(keyToReaderAction('F')).toBe('toggle-eye-filter');
     expect(keyToReaderAction('Escape')).toBe('go-back');

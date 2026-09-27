@@ -49,6 +49,16 @@ function startsSpread(pages: LoadedPage[], i: number): boolean {
   );
 }
 
+/** Whether `chapterId` contains at least one authoritative RIGHT/LEFT
+ * pair from the API. Manual parity correction is only appropriate when
+ * this signal is absent for the entire chapter. */
+export function chapterHasMarkedSpread(pages: LoadedPage[], chapterId: number): boolean {
+  for (let i = 0; i < pages.length - 1; i++) {
+    if (pages[i].chapterId === chapterId && startsSpread(pages, i)) return true;
+  }
+  return false;
+}
+
 /**
  * Whether the chapter starting at `start` opens with a solo cover in
  * double mode. Print keeps every spread on facing pages, so the
@@ -85,20 +95,43 @@ function coverBindsSolo(pages: LoadedPage[], start: number): boolean {
  * its RIGHT half renders solo instead, so no spread is ever cut across
  * two frames.
  */
-export function buildPageGroups(pages: LoadedPage[], mode: PageMode): PageGroup[] {
+export function buildPageGroups(
+  pages: LoadedPage[],
+  mode: PageMode,
+  pairingShifts: ReadonlyMap<number, readonly number[]> = new Map(),
+): PageGroup[] {
   if (mode === 'single' || pages.length === 0) {
     return pages.map((p, i) => ({ pages: [p], firstPageIndex: i }));
+  }
+  // One linear pre-scan keeps authoritative marker detection out of the
+  // grouping loop. If a chapter has any marked spread, ignore all manual
+  // shifts for that chapter; stored corrections may be stale or malformed.
+  const chaptersWithMarkedSpreads = new Set<number>();
+  for (let pageIndex = 0; pageIndex < pages.length - 1; pageIndex++) {
+    if (startsSpread(pages, pageIndex)) {
+      chaptersWithMarkedSpreads.add(pages[pageIndex].chapterId);
+    }
   }
   const groups: PageGroup[] = [];
   let i = 0;
   let atChapterStart = true;
   let currentChapter = pages[0].chapterId;
+  let chapterStart = 0;
+  let effectiveShifts = chaptersWithMarkedSpreads.has(currentChapter)
+    ? new Set<number>()
+    : new Set(pairingShifts.get(currentChapter) ?? []);
   while (i < pages.length) {
     const a = pages[i];
     if (a.chapterId !== currentChapter) {
       currentChapter = a.chapterId;
+      chapterStart = i;
       atChapterStart = true;
+      effectiveShifts = chaptersWithMarkedSpreads.has(currentChapter)
+        ? new Set<number>()
+        : new Set(pairingShifts.get(currentChapter) ?? []);
     }
+    const chapterOffset = i - chapterStart;
+    const hasShift = (offset: number) => effectiveShifts.has(offset);
     if (startsSpread(pages, i)) {
       groups.push({ pages: [a, pages[i + 1]], firstPageIndex: i });
       atChapterStart = false;
@@ -107,14 +140,29 @@ export function buildPageGroups(pages: LoadedPage[], mode: PageMode): PageGroup[
     }
     if (atChapterStart) {
       atChapterStart = false;
-      if (coverBindsSolo(pages, i)) {
+      const autoCoverSolo = coverBindsSolo(pages, i);
+      if (hasShift(0) ? !autoCoverSolo : autoCoverSolo) {
         groups.push({ pages: [a], firstPageIndex: i });
         i += 1;
         continue;
       }
     }
+    // A non-zero shift makes this page a new solo frame and restarts
+    // pairing on the following page. Offset zero is special: it flips
+    // the automatic cover decision above instead of always forcing a
+    // solo page. API-marked spreads are handled first and stay whole.
+    if (chapterOffset > 0 && hasShift(chapterOffset)) {
+      groups.push({ pages: [a], firstPageIndex: i });
+      i += 1;
+      continue;
+    }
     const b = pages[i + 1];
-    if (b && b.chapterId === a.chapterId && !startsSpread(pages, i + 1)) {
+    if (
+      b &&
+      b.chapterId === a.chapterId &&
+      !startsSpread(pages, i + 1) &&
+      !hasShift(chapterOffset + 1)
+    ) {
       groups.push({ pages: [a, b], firstPageIndex: i });
       i += 2;
     } else {
@@ -221,6 +269,7 @@ export function firstGroupOfChapter(
  *   jumpChapterStart      — Home, jumps to the first page of the current chapter
  *   jumpChapterEnd        — End, jumps to the last page of the current chapter
  *   togglePageMode        — D
+ *   shiftPagePairing      — P
  *   toggleEyeFilter       — F
  *   goBack                — Escape
  */
@@ -232,6 +281,7 @@ export type ReaderAction =
   | 'jump-chapter-start'
   | 'jump-chapter-end'
   | 'toggle-page-mode'
+  | 'shift-page-pairing'
   | 'toggle-eye-filter'
   | 'reload-images'
   | 'open-help'
@@ -251,6 +301,8 @@ const KEY_MAP: Record<string, ReaderAction> = {
   End:        'jump-chapter-end',
   d:          'toggle-page-mode',
   D:          'toggle-page-mode',
+  p:          'shift-page-pairing',
+  P:          'shift-page-pairing',
   f:          'toggle-eye-filter',
   F:          'toggle-eye-filter',
   r:          'reload-images',

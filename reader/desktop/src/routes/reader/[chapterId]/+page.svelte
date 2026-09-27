@@ -11,6 +11,8 @@
     getPageModeForTitle,
     setPageModeForTitle,
     nextPageMode,
+    getPairingShifts,
+    togglePairingShift,
     getLastReadPage,
     setLastReadPage,
     getEyeFilter,
@@ -27,6 +29,7 @@
     scanChapterBounds,
     chapterIdAfter,
     chapterIdBefore,
+    chapterHasMarkedSpread,
     findGroupContainingPage,
     firstGroupOfChapter,
     imgLoadingMode,
@@ -170,7 +173,11 @@
   // Layout: single page per frame or two pages side-by-side. Wide
   // monitors benefit from double. Persisted via localStorage so the
   // choice survives reloads.
-  let pageMode: PageMode = $state('single');
+  let pageMode = $state<PageMode>('single');
+
+  // Saved manual pairing corrections for every chapter currently in
+  // the continuous scroll. Each value is a chapter-local page offset.
+  let pairingShiftsByChapter: Map<number, number[]> = $state(new Map());
 
   // Eye-protection sepia filter; cycles off → low → med → high. Also
   // persisted, also survives reloads.
@@ -414,7 +421,9 @@
 
   // Pages bundled into render frames. See lib/readerLogic.ts for the
   // pure grouping logic + its unit tests.
-  let pageGroups: PageGroup[] = $derived(buildPageGroups(loadedPages, pageMode));
+  let pageGroups: PageGroup[] = $derived(
+    buildPageGroups(loadedPages, pageMode, pairingShiftsByChapter),
+  );
 
   // Absolute index in loadedPages -> 1-based page number within its own
   // chapter. The reload overlay has to agree with the progress bar,
@@ -462,6 +471,15 @@
   let currentChapterFirstIndex = $derived(chapterBounds.firstIndex);
   let chapterPageCount = $derived(chapterBounds.count);
   let pageInChapter = $derived(currentPageIndex - currentChapterFirstIndex + 1);
+  let pairingShiftActive = $derived(
+    (pairingShiftsByChapter.get(visibleChapterId) ?? []).includes(pageInChapter - 1),
+  );
+  let visibleChapterHasMarkedSpread = $derived(
+    chapterHasMarkedSpread(loadedPages, visibleChapterId),
+  );
+  let pairingShiftAvailable = $derived(
+    pageMode === 'double' && visibleChapterId !== 0 && !visibleChapterHasMarkedSpread,
+  );
 
   // ---------- auto-hide bars ----------
 
@@ -585,6 +603,7 @@
     initialViewer = null;
     loadedPages = [];
     loadedChapterIds = new Set();
+    pairingShiftsByChapter = new Map();
     allChapters = [];
     titleDetailLoaded = false;
     prefetchingChapterIds = new Set();
@@ -713,6 +732,10 @@
   function appendChapter(v: MangaViewer) {
     if (loadedChapterIds.has(v.chapterId)) return;
     loadedChapterIds = setWith(loadedChapterIds, v.chapterId);
+    pairingShiftsByChapter = new Map(pairingShiftsByChapter).set(
+      v.chapterId,
+      getPairingShifts(v.chapterId),
+    );
     const pagesOnly = (v.pages ?? [])
       .map(p => p.data?.mangaPage)
       .filter((mp): mp is MangaPage => !!mp);
@@ -943,6 +966,21 @@
     if (target >= 0) goToGroupIndex(target);
   }
 
+  async function shiftPagePairing() {
+    if (!pairingShiftAvailable) return;
+    const oldPageIndex = currentPageIndex;
+    const chapterId = visibleChapterId;
+    const chapterOffset = oldPageIndex - currentChapterFirstIndex;
+    const shifts = togglePairingShift(chapterId, chapterOffset);
+    pairingShiftsByChapter = new Map(pairingShiftsByChapter).set(chapterId, shifts);
+
+    // Regroup around the same underlying page. The frame index itself
+    // may change when an earlier correction flips the chapter parity.
+    await tick();
+    const target = findGroupContainingPage(pageGroups, oldPageIndex);
+    if (target >= 0) goToGroupIndex(target);
+  }
+
   // Unified navigation: every forward/back input (keys, click zones)
   // routes through advance() so they all behave the same way at chapter
   // boundaries. Within a chapter it's just the local group move. At the
@@ -1035,6 +1073,7 @@
       case 'jump-chapter-start':     jumpToChapterEdge('start'); break;
       case 'jump-chapter-end':       jumpToChapterEdge('end');   break;
       case 'toggle-page-mode':       togglePageMode(); break;
+      case 'shift-page-pairing':     void shiftPagePairing(); break;
       case 'toggle-eye-filter':      toggleEyeFilter(); break;
       case 'reload-images':          reloadAllImages(); break;
       case 'open-help':              openHelp(); break;
@@ -1097,6 +1136,26 @@
           <rect x="13" y="4" width="9" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
         </svg>
       {/if}
+    </button>
+
+    <button
+      class="pairing-toggle"
+      class:on={pairingShiftActive}
+      onclick={() => void shiftPagePairing()}
+      disabled={!pairingShiftAvailable}
+      title={visibleChapterHasMarkedSpread
+        ? 'Pairing is fixed by this chapter\'s publisher spread markers'
+        : pageMode === 'single'
+          ? 'Switch to double-page layout to adjust pairing'
+          : 'Shift double-page pairing at this page (press P)'}
+      aria-label="Shift double-page pairing at this page"
+      aria-pressed={pairingShiftActive}
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <rect x="2" y="6" width="8" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+        <rect x="14" y="6" width="8" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M12 2v8m0 0-2.5-2.5M12 10l2.5-2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
     </button>
 
     <!-- Eye-protection sepia filter: crescent moon icon, button tints
@@ -1424,6 +1483,32 @@
   .mode-toggle:hover {
     color: var(--text);
     background: rgba(255, 255, 255, 0.06);
+  }
+
+  .pairing-toggle {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 4px 6px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    transition: color 0.15s, background 0.15s, opacity 0.15s;
+    flex-shrink: 0;
+  }
+
+  .pairing-toggle:hover:not(:disabled) {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .pairing-toggle.on {
+    color: var(--accent);
+  }
+
+  .pairing-toggle:disabled {
+    cursor: default;
+    opacity: 0.3;
   }
 
   .filter-toggle {
