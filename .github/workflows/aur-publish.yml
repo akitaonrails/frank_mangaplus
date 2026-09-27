@@ -131,4 +131,7 @@ jobs:
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: "Update to ${{ steps.version.outputs.version }}"
-          ssh_keyscan_types: ed25519
+          # AUR's OpenSSH 10.5 endpoint currently stalls ed25519-only
+          # ssh-keyscan from GitHub runners. RSA/ECDSA scans complete and
+          # still pin the server host key before the authenticated push.
+          ssh_keyscan_types: rsa,ecdsa
