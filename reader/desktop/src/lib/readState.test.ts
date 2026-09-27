@@ -14,6 +14,9 @@ import {
   getPageModeForTitle,
   setPageModeForTitle,
   nextPageMode,
+  getPairingShifts,
+  setPairingShifts,
+  togglePairingShift,
   getLastReadPage,
   setLastReadPage,
   getEyeFilter,
@@ -133,6 +136,44 @@ describe('readState', () => {
   it('nextPageMode toggles single ↔ double', () => {
     expect(nextPageMode('single')).toBe('double');
     expect(nextPageMode('double')).toBe('single');
+  });
+
+  it('pairing shifts persist independently per chapter', () => {
+    setPairingShifts(10, [0, 7, 3]);
+    setPairingShifts(20, [4]);
+
+    expect(getPairingShifts(10)).toEqual([0, 3, 7]);
+    expect(getPairingShifts(20)).toEqual([4]);
+    expect(getPairingShifts(30)).toEqual([]);
+  });
+
+  it('pairing shift toggle adds and removes multiple saved offsets', () => {
+    expect(togglePairingShift(10, 5)).toEqual([5]);
+    expect(togglePairingShift(10, 0)).toEqual([0, 5]);
+    expect(togglePairingShift(10, 5)).toEqual([0]);
+    expect(getPairingShifts(10)).toEqual([0]);
+  });
+
+  it('removing a pairing shift clears all later dependent shifts', () => {
+    setPairingShifts(10, [3, 6]);
+
+    expect(togglePairingShift(10, 3)).toEqual([]);
+    expect(getPairingShifts(10)).toEqual([]);
+  });
+
+  it('pairing shifts validate malformed storage and invalid offsets', () => {
+    localStorage.setItem('mp:pairingShifts:10', JSON.stringify([4, -1, 2.5, '3', 4, 0]));
+    expect(getPairingShifts(10)).toEqual([0, 4]);
+
+    localStorage.setItem('mp:pairingShifts:11', '{not-json}');
+    expect(getPairingShifts(11)).toEqual([]);
+    localStorage.setItem('mp:pairingShifts:12', JSON.stringify({ offset: 2 }));
+    expect(getPairingShifts(12)).toEqual([]);
+
+    expect(togglePairingShift(10, -1)).toEqual([0, 4]);
+    expect(togglePairingShift(10, 1.5)).toEqual([0, 4]);
+    expect(getPairingShifts(-1)).toEqual([]);
+    expect(getPairingShifts(1.5)).toEqual([]);
   });
 
   it('per-chapter last-read page round-trips', () => {

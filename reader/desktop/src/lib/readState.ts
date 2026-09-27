@@ -4,6 +4,7 @@
 //   mp:read:<titleId>    → JSON array of read chapterIds (deduped)
 //   mp:last:<titleId>    → JSON { chapterId, t } for "continue reading"
 //   mp:pageMode:<titleId> → reader page layout for that title
+//   mp:pairingShifts:<chapterId> → JSON array of zero-based page offsets
 //
 // All ops are sync and safe to call from Svelte effects; localStorage is
 // available in the Tauri WebView (it's webkit / wry).
@@ -149,6 +150,51 @@ export function setPageModeForTitle(titleId: number, mode: PageMode) {
 // The D key / toggle button switches between the two layouts.
 export function nextPageMode(mode: PageMode): PageMode {
   return mode === 'single' ? 'double' : 'single';
+}
+
+// Manual double-page pairing corrections, stored per chapter because
+// publishers can omit spread markers in one edition while marking the
+// same pages in another. Offset 0 inverts the automatic cover decision;
+// later offsets make that page solo and restart pairing after it.
+const KEY_PAIRING_SHIFTS = (chapterId: number) => `mp:pairingShifts:${chapterId}`;
+
+function validPairingShifts(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter(
+    (offset): offset is number => Number.isInteger(offset) && offset >= 0,
+  ))].sort((a, b) => a - b);
+}
+
+export function getPairingShifts(chapterId: number): number[] {
+  if (!Number.isInteger(chapterId) || chapterId <= 0) return [];
+  try {
+    const raw = localStorage.getItem(KEY_PAIRING_SHIFTS(chapterId));
+    return raw == null ? [] : validPairingShifts(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+export function setPairingShifts(chapterId: number, offsets: readonly number[]) {
+  if (!Number.isInteger(chapterId) || chapterId <= 0) return;
+  try {
+    localStorage.setItem(KEY_PAIRING_SHIFTS(chapterId), JSON.stringify(validPairingShifts(offsets)));
+  } catch (e) {
+    console.warn('setPairingShifts failed', e);
+  }
+}
+
+export function togglePairingShift(chapterId: number, offset: number): number[] {
+  const current = getPairingShifts(chapterId);
+  if (!Number.isInteger(offset) || offset < 0) return current;
+  // Later shifts were chosen against the parity established by every
+  // earlier shift. Removing one invalidates that dependent suffix, so
+  // retain only corrections that precede the removed offset.
+  const next = current.includes(offset)
+    ? current.filter(saved => saved < offset)
+    : [...current, offset].sort((a, b) => a - b);
+  setPairingShifts(chapterId, next);
+  return next;
 }
 
 // Reading-comfort filter applied to all manga pages. Warms the whites
