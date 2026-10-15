@@ -50,6 +50,7 @@
   } from '$lib/contentLocale';
   import { withIpcTimeout } from '$lib/ipcTimeout';
   import { getTitleDetail } from '$lib/ipcCommands';
+  import { createReaderResizeAnchor } from '$lib/readerResize';
 
   /** Immutable Set update helpers — Svelte 5 needs a new reference to
    *  notice the change, and `new Set(old).add(x)` was repeated in 6+
@@ -481,6 +482,25 @@
     pageMode === 'double' && visibleChapterId !== 0 && !visibleChapterHasMarkedSpread,
   );
 
+  // Every frame is 100vh, so resizing reflows the stack under a fixed
+  // scrollTop. Preserve the first visible page until the resize burst
+  // settles, and ignore observer updates while that anchor is active.
+  const resizeAnchor = createReaderResizeAnchor({
+    canAnchor: () => !loading && pageGroups.length > 0,
+    getPageIndex: () => currentPageIndex,
+    restorePage: pageIndex => {
+      const target = findGroupContainingPage(pageGroups, pageIndex);
+      const frame = frameEls[target];
+      if (target < 0 || !frame) return;
+      currentGroup = target;
+      frame.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'start' });
+    },
+  });
+
+  function onWindowResize() {
+    resizeAnchor.onResize();
+  }
+
   // ---------- auto-hide bars ----------
 
   // The header and footer overlay the page (position: fixed) so the
@@ -555,6 +575,7 @@
     eyeFilter = getEyeFilter();
     window.addEventListener('keydown', onKey);
     window.addEventListener('mousemove', onBarMouseMove);
+    window.addEventListener('resize', onWindowResize);
     document.addEventListener('visibilitychange', onVisibilityChange);
     const urlSweepTimer = setInterval(refreshExpiredChapterUrls, URL_SWEEP_INTERVAL_MS);
     // Bars start visible so the user can orient, then collapse.
@@ -563,8 +584,10 @@
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousemove', onBarMouseMove);
+      window.removeEventListener('resize', onWindowResize);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       clearInterval(urlSweepTimer);
+      resizeAnchor.cancel();
       observer?.disconnect();
     };
   });
@@ -599,6 +622,7 @@
   });
 
   function resetReaderState() {
+    resizeAnchor.cancel();
     error = '';
     initialViewer = null;
     loadedPages = [];
@@ -857,6 +881,10 @@
     if (frameEls.length === 0 || !scrollRoot) return;
     observer = new IntersectionObserver(
       (entries) => {
+        // Mid-resize the frames reflow under a fixed scrollTop, so
+        // whatever is visible is not where the user was. Letting that
+        // through would also overwrite the saved last-read page.
+        if (resizeAnchor.active) return;
         for (const entry of entries) {
           if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
             const idx = Number((entry.target as HTMLElement).dataset.groupIndex);
