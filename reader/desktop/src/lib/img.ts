@@ -1,5 +1,9 @@
-// Convert a MANGA Plus CDN URL into one our Tauri `mpimg://` custom
-// protocol will handle. The Rust side then fetches with the right
+import { convertFileSrc, isTauri } from '@tauri-apps/api/core';
+
+// Convert a MANGA Plus CDN URL into one our Tauri `mpimg` custom
+// protocol will handle. Tauri maps custom protocols to HTTP-shaped URLs
+// on Windows, so this must go through convertFileSrc instead of manually
+// swapping the scheme. The Rust side then fetches with the right
 // User-Agent + plus_vw_token cookie, threads the response back to the
 // WebView, and caches the bytes to ~/.cache/mangaplus-reader/.
 //
@@ -20,5 +24,7 @@
  */
 export function proxied(url: string | undefined | null): string {
   if (!url) return '';
-  return url.replace(/^https:/, 'mpimg:');
+  if (!url.startsWith('https://')) return url;
+  if (!isTauri()) return url;
+  return convertFileSrc(url, 'mpimg');
 }
