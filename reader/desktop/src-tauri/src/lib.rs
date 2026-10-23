@@ -345,11 +345,54 @@ fn strip_retry_param(url: &str) -> String {
     }
 }
 
+/// Recover and validate the upstream CDN URL embedded by Tauri's
+/// `convertFileSrc`. On Windows WebView2 exposes custom protocols as
+/// `http://<scheme>.localhost/...`; WebKit uses `<scheme>://localhost/...`.
+fn decode_mpimg_request(request_uri: &str) -> Result<String, String> {
+    let request_uri = strip_retry_param(request_uri);
+    let request: tauri::http::Uri = request_uri
+        .parse()
+        .map_err(|e| format!("invalid image request URI: {e}"))?;
+
+    let origin_is_valid = matches!(
+        (request.scheme_str(), request.host()),
+        (Some("mpimg"), Some("localhost")) | (Some("http"), Some("mpimg.localhost"))
+    );
+    if !origin_is_valid {
+        return Err("invalid image protocol origin".into());
+    }
+
+    let encoded = request.path().strip_prefix('/').unwrap_or(request.path());
+    if encoded.is_empty() {
+        return Err("missing image URL".into());
+    }
+    let decoded = percent_encoding::percent_decode_str(encoded)
+        .decode_utf8()
+        .map_err(|_| "image URL is not valid UTF-8".to_string())?
+        .into_owned();
+    let upstream = tauri::Url::parse(&decoded).map_err(|e| format!("invalid image URL: {e}"))?;
+
+    let host = upstream
+        .host_str()
+        .ok_or_else(|| "image URL has no host".to_string())?;
+    let trusted_host = host == "tokyo-cdn.com" || host.ends_with(".tokyo-cdn.com");
+    if upstream.scheme() != "https"
+        || !trusted_host
+        || !upstream.username().is_empty()
+        || upstream.password().is_some()
+        || upstream.port().is_some_and(|port| port != 443)
+    {
+        return Err("image URL is outside the trusted CDN".into());
+    }
+
+    Ok(decoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_to_language, lang_str_to_enum, merge_views, persistent_config_dir_from,
-        resolve_secret, strip_retry_param,
+        decode_mpimg_request, filter_to_language, lang_str_to_enum, merge_views,
+        persistent_config_dir_from, resolve_secret, strip_retry_param,
     };
     #[cfg(unix)]
     use super::write_secret_file;
@@ -388,6 +431,32 @@ mod tests {
             strip_retry_param("https://cdn/a/1.webp?mpretryx=9"),
             "https://cdn/a/1.webp?mpretryx=9"
         );
+    }
+
+    #[test]
+    fn decodes_windows_and_native_mpimg_requests() {
+        let encoded = "https%3A%2F%2Fjumpg-assets3.tokyo-cdn.com%2Fsecure%2F1.webp%3Fexpires%3D123%26hash%3Dabc";
+
+        assert_eq!(
+            decode_mpimg_request(&format!("http://mpimg.localhost/{encoded}")),
+            Ok("https://jumpg-assets3.tokyo-cdn.com/secure/1.webp?expires=123&hash=abc".into())
+        );
+        assert_eq!(
+            decode_mpimg_request(&format!("mpimg://localhost/{encoded}?mpretry=2")),
+            Ok("https://jumpg-assets3.tokyo-cdn.com/secure/1.webp?expires=123&hash=abc".into())
+        );
+    }
+
+    #[test]
+    fn rejects_untrusted_mpimg_targets() {
+        for request in [
+            "http://mpimg.localhost/http%3A%2F%2Fjumpg-assets.tokyo-cdn.com%2Fa.webp",
+            "http://mpimg.localhost/https%3A%2F%2Ftokyo-cdn.com.evil.example%2Fa.webp",
+            "http://mpimg.localhost/https%3A%2F%2F127.0.0.1%2Fa.webp",
+            "http://other.localhost/https%3A%2F%2Fjumpg-assets.tokyo-cdn.com%2Fa.webp",
+        ] {
+            assert!(decode_mpimg_request(request).is_err(), "accepted {request}");
+        }
     }
 
     fn title(id: u32, name: &str, language: i32) -> proto::Title {
@@ -1344,19 +1413,28 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        // mpimg:// custom protocol — proxies image fetches through our Rust
+        // mpimg custom protocol — proxies image fetches through our Rust
         // client so the plus_vw_token cookie (issued on the API call)
         // threads through to the CDN. Without this proxy the WebView's
         // <img> tags hit jumpg-assets3 cookieless and get 400. The CDN
         // also rejects non-OkHttp-looking User-Agents, which our client
         // sets to "okhttp/4.12.0".
         //
-        // Frontend usage: replace the `https://` of imageUrl with `mpimg://`.
+        // Frontend usage: pass imageUrl through Tauri's `convertFileSrc` so
+        // WebView2 receives its required `http://mpimg.localhost/...` form.
         .register_asynchronous_uri_scheme_protocol("mpimg", move |_ctx, request, responder| {
-            let url = request.uri().to_string();
-            // Drop the reader's retry cache-buster before the URL goes
-            // to the CDN — it is not part of the signed query.
-            let https_url = strip_retry_param(&url.replacen("mpimg://", "https://", 1));
+            let https_url = match decode_mpimg_request(&request.uri().to_string()) {
+                Ok(url) => url,
+                Err(error) => {
+                    eprintln!("[mpimg] rejected request: {error}");
+                    let response = Response::builder()
+                        .status(400)
+                        .body(b"invalid image request".to_vec())
+                        .unwrap_or_else(|_| Response::new(b"invalid image request".to_vec()));
+                    responder.respond(response);
+                    return;
+                }
+            };
             let client = scheme_state_for_handler
                 .lock()
                 .map(|g| g.clone())
